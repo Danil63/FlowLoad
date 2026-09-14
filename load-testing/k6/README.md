@@ -148,6 +148,18 @@ AUTH_VUS=5 make auth-dashboard
 FRONTEND_URL='https://frontend-url-here' make browser
 ```
 
+Grafana observability:
+
+```bash
+make grafana-check
+make public-grafana USERS=10
+make auth-grafana USERS=1
+```
+
+These commands send k6 metrics to Prometheus remote write and run logs to Loki
+through the protected Grafana gateway. Configure `GRAFANA_GATEWAY_URL` and
+`GRAFANA_PUSH_TOKEN` in `load-testing/k6/.env` after deploying `render.yaml`.
+
 For short commands, put secrets in `load-testing/k6/tokens.txt` or local settings in `load-testing/k6/.env`. Both are ignored by git. Do not commit real session tokens, even to a private repository.
 
 The first browser flight scenario is intentionally simple. It does not try to avoid obstacles. It opens the mobile game, injects the session cookie, waits for a canvas, optionally clicks configured route/start selectors, taps the screen for takeoff, waits during the flight, and saves screenshots.

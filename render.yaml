@@ -1,0 +1,77 @@
+services:
+  - type: web
+    name: big-journey-grafana
+    runtime: docker
+    plan: 0.5c-512mb
+    region: frankfurt
+    dockerfilePath: ./observability/grafana/Dockerfile
+    dockerContext: .
+    dockerCommand: /bin/sh -c 'export GF_SERVER_HTTP_PORT=$PORT; exec /run.sh'
+    disk:
+      name: grafana-data
+      mountPath: /var/lib/grafana
+      sizeGB: 1
+    envVars:
+      - key: GF_SECURITY_ADMIN_USER
+        value: admin
+      - key: GF_SECURITY_ADMIN_PASSWORD
+        sync: false
+      - key: GF_USERS_ALLOW_SIGN_UP
+        value: "false"
+      - key: PROMETHEUS_HOSTPORT
+        fromService:
+          type: pserv
+          name: big-journey-prometheus
+          property: hostport
+      - key: LOKI_HOSTPORT
+        fromService:
+          type: pserv
+          name: big-journey-loki
+          property: hostport
+
+  - type: web
+    name: big-journey-k6-gateway
+    runtime: docker
+    plan: 0.5c-512mb
+    region: frankfurt
+    dockerfilePath: ./observability/gateway/Dockerfile
+    dockerContext: .
+    healthCheckPath: /health
+    envVars:
+      - key: GATEWAY_TOKEN
+        generateValue: true
+      - key: PROMETHEUS_HOSTPORT
+        fromService:
+          type: pserv
+          name: big-journey-prometheus
+          property: hostport
+      - key: LOKI_HOSTPORT
+        fromService:
+          type: pserv
+          name: big-journey-loki
+          property: hostport
+
+  - type: pserv
+    name: big-journey-prometheus
+    runtime: docker
+    plan: 0.5c-512mb
+    region: frankfurt
+    dockerfilePath: ./observability/prometheus/Dockerfile
+    dockerContext: .
+    dockerCommand: /bin/prometheus --config.file=/etc/prometheus/prometheus.yml --storage.tsdb.path=/prometheus --web.listen-address=0.0.0.0:$PORT --web.enable-remote-write-receiver
+    disk:
+      name: prometheus-data
+      mountPath: /prometheus
+      sizeGB: 1
+
+  - type: pserv
+    name: big-journey-loki
+    runtime: docker
+    plan: 0.5c-512mb
+    region: frankfurt
+    dockerfilePath: ./observability/loki/Dockerfile
+    dockerContext: .
+    disk:
+      name: loki-data
+      mountPath: /loki
+      sizeGB: 1

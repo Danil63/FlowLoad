@@ -1,6 +1,6 @@
 .DEFAULT_GOAL := help
 
-.PHONY: help start setup token init check ping public public-report public-10 public-50 public-100 public-300 auth auth-report auth-dashboard auth-status auth-debug auth-1 auth-5 auth-50 auth-100 flight-once browser browser-dashboard dist dist-public dist-auth dist-flight k6-check k6-public k6-public-report k6-auth k6-auth-dashboard k6-auth-report k6-auth-status k6-flight-once k6-browser-flight-smoke k6-browser-flight-dashboard k6-distributed
+.PHONY: help start setup token init check ping public public-report public-10 public-50 public-100 public-300 auth auth-report auth-dashboard auth-status auth-debug auth-1 auth-5 auth-50 auth-100 flight-once browser browser-dashboard grafana-check public-grafana auth-grafana dist dist-public dist-auth dist-flight k6-check k6-public k6-public-report k6-auth k6-auth-dashboard k6-auth-report k6-auth-status k6-flight-once k6-browser-flight-smoke k6-browser-flight-dashboard k6-grafana k6-distributed
 
 K6_DIR := load-testing/k6
 K6_SCENARIOS := $(K6_DIR)/scenarios
@@ -8,6 +8,7 @@ K6_RESULTS := $(K6_DIR)/results
 K6_ENV := $(K6_DIR)/.env
 TOKENS_FILE ?= $(K6_DIR)/tokens.txt
 REPORT_TS := $(shell date +%Y%m%d-%H%M%S)
+TEST_ID ?= $(REPORT_TS)
 
 BASE_URL ?= https://entreporgneur-big-journey-7b03.twc1.net
 FRONTEND_URL ?= https://entreprorgneur-big-journey-2ebf.twc1.net
@@ -27,6 +28,8 @@ BROWSER_ITERATIONS ?= 1
 FLIGHT_OBSERVE_SECONDS ?= 20
 K6_BROWSER_HEADLESS ?= false
 OPEN_REPORT ?= true
+GRAFANA_GATEWAY_URL ?=
+GRAFANA_PUSH_TOKEN ?=
 MODE ?= auth
 TOTAL_VUS ?= 100
 MACHINE_TOTAL ?= 1
@@ -70,6 +73,9 @@ help:
 	@echo "  make auth-debug       Tiny auth run with failed endpoint statuses"
 	@echo "  make flight-once      One guarded state-changing flight"
 	@echo "  make browser          Mobile browser smoke flight"
+	@echo "  make grafana-check    Check Grafana gateway settings"
+	@echo "  make public-grafana USERS=50  Send public test metrics/logs to Grafana"
+	@echo "  make auth-grafana USERS=5     Send auth test metrics/logs to Grafana"
 	@echo "  make dist             Distributed run from load-testing/k6/.env"
 	@echo "  make dist-public      Distributed public mode"
 	@echo "  make dist-auth        Distributed auth mode"
@@ -252,6 +258,36 @@ k6-flight-once:
 browser: k6-browser-flight-smoke
 
 browser-dashboard: k6-browser-flight-dashboard
+
+grafana-check:
+	@test -n "$(GRAFANA_GATEWAY_URL)" || (echo "Set GRAFANA_GATEWAY_URL in $(K6_ENV)"; exit 1)
+	@test -n "$(GRAFANA_PUSH_TOKEN)" || (echo "Set GRAFANA_PUSH_TOKEN in $(K6_ENV)"; exit 1)
+	@curl -sS -o /dev/null -w "Grafana gateway health: HTTP %{http_code}\n" "$(GRAFANA_GATEWAY_URL)/health"
+
+public-grafana:
+	@$(MAKE) --no-print-directory k6-grafana MODE=public
+
+auth-grafana:
+	@$(MAKE) --no-print-directory k6-grafana MODE=auth
+
+k6-grafana:
+	@test -n "$(GRAFANA_GATEWAY_URL)" || (echo "Set GRAFANA_GATEWAY_URL in $(K6_ENV)"; exit 1)
+	@test -n "$(GRAFANA_PUSH_TOKEN)" || (echo "Set GRAFANA_PUSH_TOKEN in $(K6_ENV)"; exit 1)
+	@MODE="$(MODE)" \
+	GRAFANA_GATEWAY_URL="$(GRAFANA_GATEWAY_URL)" \
+	GRAFANA_PUSH_TOKEN="$(GRAFANA_PUSH_TOKEN)" \
+	TEST_ID="$(TEST_ID)" \
+	BASE_URL="$(BASE_URL)" \
+	SESSION_TOKEN="$(SESSION_TOKEN_FOR_K6)" \
+	SESSION_TOKENS="$(SESSION_TOKENS_FOR_K6)" \
+	TOKENS_FILE="$(TOKENS_FILE_ABS)" \
+	VUS="$(PUBLIC_VUS_FOR_K6)" \
+	AUTH_VUS="$(AUTH_VUS_FOR_K6)" \
+	RAMP_UP="$(RAMP_UP)" \
+	HOLD="$(HOLD)" \
+	RAMP_DOWN="$(RAMP_DOWN)" \
+	THINK_TIME_SECONDS="$(THINK_TIME_SECONDS)" \
+	load-testing/k6/scripts/run-grafana.sh
 
 k6-browser-flight-smoke:
 	@test -n "$(SESSION_TOKEN_FOR_K6)" || (echo "Set SESSION_TOKEN or MAKEFILE_SESSION_TOKEN first"; exit 1)

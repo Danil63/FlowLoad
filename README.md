@@ -28,3 +28,15 @@ make auth-dashboard
 
 See [MEMORIES.md](./MEMORIES.md) for colleague onboarding commands and
 [load-testing/k6/README.md](./load-testing/k6/README.md) for detailed notes.
+
+## Grafana
+
+Render/Grafana observability config is included:
+
+```bash
+make grafana-check
+make public-grafana USERS=10
+make auth-grafana USERS=1
+```
+
+See [observability/README.md](./observability/README.md).
