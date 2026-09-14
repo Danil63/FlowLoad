@@ -1,0 +1,4 @@
+# One session token per line.
+# Do not put real tokens in this example file.
+example-token-1
+example-token-2

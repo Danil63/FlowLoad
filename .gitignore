@@ -1,0 +1,10 @@
+.DS_Store
+
+# Local k6 settings and secrets
+load-testing/k6/.env
+load-testing/k6/.env.local
+load-testing/k6/tokens.txt
+load-testing/k6/tokens-*.txt
+
+# Generated reports
+load-testing/k6/results/

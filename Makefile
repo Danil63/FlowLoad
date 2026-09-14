@@ -1,0 +1,306 @@
+.DEFAULT_GOAL := help
+
+.PHONY: help start setup token init check ping public public-report public-10 public-50 public-100 public-300 auth auth-report auth-dashboard auth-status auth-debug auth-1 auth-5 auth-50 auth-100 flight-once browser browser-dashboard dist dist-public dist-auth dist-flight k6-check k6-public k6-public-report k6-auth k6-auth-dashboard k6-auth-report k6-auth-status k6-flight-once k6-browser-flight-smoke k6-browser-flight-dashboard k6-distributed
+
+K6_DIR := load-testing/k6
+K6_SCENARIOS := $(K6_DIR)/scenarios
+K6_RESULTS := $(K6_DIR)/results
+K6_ENV := $(K6_DIR)/.env
+TOKENS_FILE ?= $(K6_DIR)/tokens.txt
+REPORT_TS := $(shell date +%Y%m%d-%H%M%S)
+
+BASE_URL ?= https://entreporgneur-big-journey-7b03.twc1.net
+FRONTEND_URL ?= https://entreprorgneur-big-journey-2ebf.twc1.net
+API_COOKIE_DOMAIN ?= entreporgneur-big-journey-7b03.twc1.net
+VUS ?= 50
+AUTH_VUS ?= 1
+USERS ?=
+RAMP_UP ?= 1m
+HOLD ?= 3m
+RAMP_DOWN ?= 30s
+THINK_TIME_SECONDS ?= 1
+FLIGHT_VUS ?= 1
+FLIGHT_ITERATIONS ?= 1
+ROUTE_ID ?= kazan-moscow
+BROWSER_VUS ?= 1
+BROWSER_ITERATIONS ?= 1
+FLIGHT_OBSERVE_SECONDS ?= 20
+K6_BROWSER_HEADLESS ?= false
+OPEN_REPORT ?= true
+MODE ?= auth
+TOTAL_VUS ?= 100
+MACHINE_TOTAL ?= 1
+MACHINE_INDEX ?= 1
+
+-include $(K6_ENV)
+
+# Optional shortcut for local/private repositories.
+# Paste one session token here if you accept the risk of storing it in Makefile:
+MAKEFILE_SESSION_TOKEN ?=
+
+# Or paste many tokens separated by commas:
+MAKEFILE_SESSION_TOKENS ?=
+
+SESSION_TOKEN_FOR_K6 := $(or $(SESSION_TOKEN),$(MAKEFILE_SESSION_TOKEN))
+SESSION_TOKENS_FOR_K6 := $(or $(SESSION_TOKENS),$(MAKEFILE_SESSION_TOKENS))
+PUBLIC_VUS_FOR_K6 := $(or $(USERS),$(VUS))
+AUTH_VUS_FOR_K6 := $(or $(USERS),$(AUTH_VUS))
+TOKENS_FILE_ABS := $(abspath $(TOKENS_FILE))
+
+help:
+	@echo "Short k6 commands:"
+	@echo "  make start            First setup on a new Mac: install k6 and prepare token file"
+	@echo "  make setup            Install k6 on macOS and prepare local files"
+	@echo "  make token            Replace local session token safely"
+	@echo "  make init             Prepare local .env and tokens.txt"
+	@echo "  make check            Check k6 installation"
+	@echo "  make ping             Check API host and /health response"
+	@echo "  make public USERS=50  Public read-only with any VUs, Russian report"
+	@echo "  make auth USERS=5     Auth read-only with any VUs"
+	@echo "  make public-10        Public read-only, 10 VUs, Russian report"
+	@echo "  make public-50        Public read-only, 50 VUs, Russian report"
+	@echo "  make public-100       Public read-only, 100 VUs, Russian report"
+	@echo "  make public-300       Public read-only, 300 VUs, Russian report"
+	@echo "  make auth-1           Auth read-only, 1 VU, Russian report"
+	@echo "  make auth-5           Auth read-only, 5 VUs, Russian report"
+	@echo "  make auth-50          Auth read-only, 50 VUs, Russian report"
+	@echo "  make auth-100         Auth read-only, 100 VUs, Russian report"
+	@echo "  make auth-dashboard   Auth read-only with live dashboard"
+	@echo "  make auth-status      One auth pass with endpoint statuses, no thresholds"
+	@echo "  make auth-debug       Tiny auth run with failed endpoint statuses"
+	@echo "  make flight-once      One guarded state-changing flight"
+	@echo "  make browser          Mobile browser smoke flight"
+	@echo "  make dist             Distributed run from load-testing/k6/.env"
+	@echo "  make dist-public      Distributed public mode"
+	@echo "  make dist-auth        Distributed auth mode"
+	@echo "  make dist-flight      Distributed flight mode, state-changing"
+	@echo ""
+	@echo "Config:"
+	@echo "  Put tokens in $(TOKENS_FILE), set SESSION_TOKEN locally, or paste into MAKEFILE_SESSION_TOKEN."
+	@echo "  Override users inline: make public USERS=50"
+	@echo "  Override timing inline: USERS=50 HOLD=1m make public"
+	@echo "  Disable report auto-open: OPEN_REPORT=false make auth-1"
+
+start: setup
+
+setup:
+	@load-testing/k6/scripts/bootstrap-macos.sh
+
+token:
+	@FORCE_TOKEN_PROMPT=true load-testing/k6/scripts/bootstrap-macos.sh
+
+init:
+	@test -f $(K6_ENV) || cp $(K6_DIR)/.env.example $(K6_ENV)
+	@test -f $(TOKENS_FILE) || cp $(K6_DIR)/tokens.example.txt $(TOKENS_FILE)
+	@mkdir -p $(K6_RESULTS)
+	@echo "Prepared $(K6_ENV) and $(TOKENS_FILE)"
+
+check: k6-check
+
+k6-check:
+	@k6 version
+
+ping:
+	@curl -sS -o /dev/null -w "HTTP %{http_code} | DNS/connect/TLS/start/total: %{time_namelookup}s / %{time_connect}s / %{time_appconnect}s / %{time_starttransfer}s / %{time_total}s\n" "$(BASE_URL)/health"
+
+public: k6-public-report
+
+public-report: k6-public-report
+
+public-10:
+	@$(MAKE) --no-print-directory k6-public-report VUS=10 RAMP_UP=10s HOLD=30s RAMP_DOWN=10s
+
+public-50:
+	@$(MAKE) --no-print-directory k6-public-report VUS=50 RAMP_UP=15s HOLD=30s RAMP_DOWN=10s
+
+public-100:
+	@$(MAKE) --no-print-directory k6-public-report VUS=100 RAMP_UP=30s HOLD=1m RAMP_DOWN=20s
+
+public-300:
+	@$(MAKE) --no-print-directory k6-public-report VUS=300 RAMP_UP=1m HOLD=2m RAMP_DOWN=30s
+
+k6-public:
+	@k6 run \
+		-e BASE_URL="$(BASE_URL)" \
+		-e VUS="$(PUBLIC_VUS_FOR_K6)" \
+		-e RAMP_UP="$(RAMP_UP)" \
+		-e HOLD="$(HOLD)" \
+		-e RAMP_DOWN="$(RAMP_DOWN)" \
+		-e THINK_TIME_SECONDS="$(THINK_TIME_SECONDS)" \
+		$(K6_SCENARIOS)/public-readonly.js
+
+k6-public-report:
+	@mkdir -p $(K6_RESULTS)
+	@report="$(K6_RESULTS)/public-readonly-ru-$(REPORT_TS).html"; \
+	RU_REPORT="$$report" k6 run \
+		-e BASE_URL="$(BASE_URL)" \
+		-e VUS="$(PUBLIC_VUS_FOR_K6)" \
+		-e RAMP_UP="$(RAMP_UP)" \
+		-e HOLD="$(HOLD)" \
+		-e RAMP_DOWN="$(RAMP_DOWN)" \
+		-e THINK_TIME_SECONDS="$(THINK_TIME_SECONDS)" \
+		$(K6_SCENARIOS)/public-readonly.js; \
+	status=$$?; \
+	if [ "$(OPEN_REPORT)" = "true" ] && [ -f "$$report" ]; then \
+		echo "Opening report: $$report"; \
+		open "$$report" >/dev/null 2>&1 || true; \
+	fi; \
+	exit $$status
+
+auth: k6-auth
+
+auth-report: k6-auth-report
+
+auth-dashboard: k6-auth-dashboard
+
+auth-status: k6-auth-status
+
+auth-debug:
+	@$(MAKE) --no-print-directory k6-auth AUTH_VUS=1 RAMP_UP=1s HOLD=5s RAMP_DOWN=1s DEBUG_AUTH=true
+
+auth-1:
+	@$(MAKE) --no-print-directory k6-auth-report AUTH_VUS=1 RAMP_UP=10s HOLD=30s RAMP_DOWN=10s
+
+auth-5:
+	@$(MAKE) --no-print-directory k6-auth-report AUTH_VUS=5 RAMP_UP=15s HOLD=1m RAMP_DOWN=10s
+
+auth-50:
+	@$(MAKE) --no-print-directory k6-auth-report AUTH_VUS=50 RAMP_UP=30s HOLD=1m RAMP_DOWN=20s
+
+auth-100:
+	@$(MAKE) --no-print-directory k6-auth-report AUTH_VUS=100 RAMP_UP=1m HOLD=2m RAMP_DOWN=30s
+
+k6-auth:
+	@[ -n "$(SESSION_TOKEN_FOR_K6)$(SESSION_TOKENS_FOR_K6)" ] || [ -f "$(TOKENS_FILE)" ] || (echo "Set SESSION_TOKEN, SESSION_TOKENS, MAKEFILE_SESSION_TOKEN, MAKEFILE_SESSION_TOKENS, or $(TOKENS_FILE) first"; exit 1)
+	@k6 run \
+		-e BASE_URL="$(BASE_URL)" \
+		-e SESSION_TOKEN="$(SESSION_TOKEN_FOR_K6)" \
+		-e SESSION_TOKENS="$(SESSION_TOKENS_FOR_K6)" \
+		-e TOKENS_FILE="$(TOKENS_FILE_ABS)" \
+		-e AUTH_VUS="$(AUTH_VUS_FOR_K6)" \
+		-e RAMP_UP="$(RAMP_UP)" \
+		-e HOLD="$(HOLD)" \
+		-e RAMP_DOWN="$(RAMP_DOWN)" \
+		-e THINK_TIME_SECONDS="$(THINK_TIME_SECONDS)" \
+		-e DEBUG_AUTH="$(DEBUG_AUTH)" \
+		$(K6_SCENARIOS)/auth-game-open.js
+
+k6-auth-dashboard:
+	@[ -n "$(SESSION_TOKEN_FOR_K6)$(SESSION_TOKENS_FOR_K6)" ] || [ -f "$(TOKENS_FILE)" ] || (echo "Set SESSION_TOKEN, SESSION_TOKENS, MAKEFILE_SESSION_TOKEN, MAKEFILE_SESSION_TOKENS, or $(TOKENS_FILE) first"; exit 1)
+	@K6_WEB_DASHBOARD=true \
+	K6_WEB_DASHBOARD_OPEN=true \
+	k6 run \
+		-e BASE_URL="$(BASE_URL)" \
+		-e SESSION_TOKEN="$(SESSION_TOKEN_FOR_K6)" \
+		-e SESSION_TOKENS="$(SESSION_TOKENS_FOR_K6)" \
+		-e TOKENS_FILE="$(TOKENS_FILE_ABS)" \
+		-e AUTH_VUS="$(AUTH_VUS_FOR_K6)" \
+		-e RAMP_UP="$(RAMP_UP)" \
+		-e HOLD="$(HOLD)" \
+		-e RAMP_DOWN="$(RAMP_DOWN)" \
+		-e THINK_TIME_SECONDS="$(THINK_TIME_SECONDS)" \
+		-e DEBUG_AUTH="$(DEBUG_AUTH)" \
+		$(K6_SCENARIOS)/auth-game-open.js
+
+k6-auth-report:
+	@[ -n "$(SESSION_TOKEN_FOR_K6)$(SESSION_TOKENS_FOR_K6)" ] || [ -f "$(TOKENS_FILE)" ] || (echo "Set SESSION_TOKEN, SESSION_TOKENS, MAKEFILE_SESSION_TOKEN, MAKEFILE_SESSION_TOKENS, or $(TOKENS_FILE) first"; exit 1)
+	@mkdir -p $(K6_RESULTS)
+	@report="$(K6_RESULTS)/auth-game-open-ru-$(REPORT_TS).html"; \
+	RU_REPORT="$$report" k6 run \
+		-e BASE_URL="$(BASE_URL)" \
+		-e SESSION_TOKEN="$(SESSION_TOKEN_FOR_K6)" \
+		-e SESSION_TOKENS="$(SESSION_TOKENS_FOR_K6)" \
+		-e TOKENS_FILE="$(TOKENS_FILE_ABS)" \
+		-e AUTH_VUS="$(AUTH_VUS_FOR_K6)" \
+		-e RAMP_UP="$(RAMP_UP)" \
+		-e HOLD="$(HOLD)" \
+		-e RAMP_DOWN="$(RAMP_DOWN)" \
+		-e THINK_TIME_SECONDS="$(THINK_TIME_SECONDS)" \
+		-e DEBUG_AUTH="$(DEBUG_AUTH)" \
+		$(K6_SCENARIOS)/auth-game-open.js; \
+	status=$$?; \
+	if [ "$(OPEN_REPORT)" = "true" ] && [ -f "$$report" ]; then \
+		echo "Opening report: $$report"; \
+		open "$$report" >/dev/null 2>&1 || true; \
+	fi; \
+	exit $$status
+
+k6-auth-status:
+	@[ -n "$(SESSION_TOKEN_FOR_K6)$(SESSION_TOKENS_FOR_K6)" ] || [ -f "$(TOKENS_FILE)" ] || (echo "Set SESSION_TOKEN, SESSION_TOKENS, MAKEFILE_SESSION_TOKEN, MAKEFILE_SESSION_TOKENS, or $(TOKENS_FILE) first"; exit 1)
+	@k6 run \
+		-e BASE_URL="$(BASE_URL)" \
+		-e SESSION_TOKEN="$(SESSION_TOKEN_FOR_K6)" \
+		-e SESSION_TOKENS="$(SESSION_TOKENS_FOR_K6)" \
+		-e TOKENS_FILE="$(TOKENS_FILE_ABS)" \
+		$(K6_SCENARIOS)/auth-status.js
+
+flight-once: k6-flight-once
+
+k6-flight-once:
+	@[ -n "$(SESSION_TOKEN_FOR_K6)$(SESSION_TOKENS_FOR_K6)" ] || [ -f "$(TOKENS_FILE)" ] || (echo "Set SESSION_TOKEN, SESSION_TOKENS, MAKEFILE_SESSION_TOKEN, MAKEFILE_SESSION_TOKENS, or $(TOKENS_FILE) first"; exit 1)
+	@ENABLE_STATE_CHANGING=true \
+	k6 run \
+		-e BASE_URL="$(BASE_URL)" \
+		-e SESSION_TOKEN="$(SESSION_TOKEN_FOR_K6)" \
+		-e SESSION_TOKENS="$(SESSION_TOKENS_FOR_K6)" \
+		-e TOKENS_FILE="$(TOKENS_FILE_ABS)" \
+		-e FLIGHT_VUS="$(FLIGHT_VUS)" \
+		-e FLIGHT_ITERATIONS="$(FLIGHT_ITERATIONS)" \
+		-e ROUTE_ID="$(ROUTE_ID)" \
+		$(K6_SCENARIOS)/flight-critical.js
+
+browser: k6-browser-flight-smoke
+
+browser-dashboard: k6-browser-flight-dashboard
+
+k6-browser-flight-smoke:
+	@test -n "$(SESSION_TOKEN_FOR_K6)" || (echo "Set SESSION_TOKEN or MAKEFILE_SESSION_TOKEN first"; exit 1)
+	@mkdir -p $(K6_RESULTS)/screenshots
+	@K6_BROWSER_HEADLESS="$(K6_BROWSER_HEADLESS)" \
+	k6 run \
+		-e FRONTEND_URL="$(FRONTEND_URL)" \
+		-e API_COOKIE_DOMAIN="$(API_COOKIE_DOMAIN)" \
+		-e SESSION_TOKEN="$(SESSION_TOKEN_FOR_K6)" \
+		-e BROWSER_VUS="$(BROWSER_VUS)" \
+		-e BROWSER_ITERATIONS="$(BROWSER_ITERATIONS)" \
+		-e FLIGHT_OBSERVE_SECONDS="$(FLIGHT_OBSERVE_SECONDS)" \
+		-e SCREENSHOT_DIR="$(K6_RESULTS)/screenshots" \
+		$(K6_SCENARIOS)/browser-simple-flight.js
+
+k6-browser-flight-dashboard:
+	@test -n "$(SESSION_TOKEN_FOR_K6)" || (echo "Set SESSION_TOKEN or MAKEFILE_SESSION_TOKEN first"; exit 1)
+	@mkdir -p $(K6_RESULTS)/screenshots
+	@K6_WEB_DASHBOARD=true \
+	K6_WEB_DASHBOARD_OPEN=true \
+	K6_BROWSER_HEADLESS="$(K6_BROWSER_HEADLESS)" \
+	k6 run \
+		-e FRONTEND_URL="$(FRONTEND_URL)" \
+		-e API_COOKIE_DOMAIN="$(API_COOKIE_DOMAIN)" \
+		-e SESSION_TOKEN="$(SESSION_TOKEN_FOR_K6)" \
+		-e BROWSER_VUS="$(BROWSER_VUS)" \
+		-e BROWSER_ITERATIONS="$(BROWSER_ITERATIONS)" \
+		-e FLIGHT_OBSERVE_SECONDS="$(FLIGHT_OBSERVE_SECONDS)" \
+		-e SCREENSHOT_DIR="$(K6_RESULTS)/screenshots" \
+		$(K6_SCENARIOS)/browser-simple-flight.js
+
+dist: k6-distributed
+
+dist-public:
+	@$(MAKE) --no-print-directory k6-distributed MODE=public
+
+dist-auth:
+	@$(MAKE) --no-print-directory k6-distributed MODE=auth
+
+dist-flight:
+	@$(MAKE) --no-print-directory k6-distributed MODE=flight
+
+k6-distributed:
+	@MODE="$(MODE)" \
+	TOTAL_VUS="$(TOTAL_VUS)" \
+	MACHINE_TOTAL="$(MACHINE_TOTAL)" \
+	MACHINE_INDEX="$(MACHINE_INDEX)" \
+	RAMP_UP="$(RAMP_UP)" \
+	HOLD="$(HOLD)" \
+	RAMP_DOWN="$(RAMP_DOWN)" \
+	THINK_TIME_SECONDS="$(THINK_TIME_SECONDS)" \
+	load-testing/k6/scripts/run-distributed.sh

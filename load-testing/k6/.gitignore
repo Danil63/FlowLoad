@@ -1,0 +1,6 @@
+.env
+.env.local
+tokens.txt
+tokens-*.txt
+!tokens.example.txt
+results/
