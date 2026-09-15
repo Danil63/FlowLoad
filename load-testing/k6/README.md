@@ -86,7 +86,7 @@ make dist
 Public read-only:
 
 ```bash
-make public USERS=50
+make public 50
 make public-10
 make public-50
 make public-100
@@ -141,9 +141,9 @@ make browser-dashboard
 Useful overrides:
 
 ```bash
-make public USERS=10
-make public USERS=50 HOLD=1m
-make auth USERS=5
+make public 10
+make public 50 HOLD=1m
+make auth 5
 AUTH_VUS=5 make auth-dashboard
 FRONTEND_URL='https://frontend-url-here' make browser
 ```
@@ -152,8 +152,8 @@ Grafana observability:
 
 ```bash
 make grafana-check
-make public-grafana USERS=10
-make auth-grafana USERS=1
+make public-grafana 10
+make auth-grafana 1
 ```
 
 These commands send k6 metrics to Prometheus remote write and run logs to Loki

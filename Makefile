@@ -16,6 +16,8 @@ API_COOKIE_DOMAIN ?= entreporgneur-big-journey-7b03.twc1.net
 VUS ?= 50
 AUTH_VUS ?= 1
 USERS ?=
+COMMAND_LINE_USERS := $(shell printf '%s\n' $(MAKECMDGOALS) | awk '/^[0-9]+$$/ { print; exit }')
+REQUESTED_USERS := $(or $(USERS),$(COMMAND_LINE_USERS))
 RAMP_UP ?= 1m
 HOLD ?= 3m
 RAMP_DOWN ?= 30s
@@ -35,6 +37,8 @@ TOTAL_VUS ?= 100
 MACHINE_TOTAL ?= 1
 MACHINE_INDEX ?= 1
 
+$(K6_ENV): ;
+
 -include $(K6_ENV)
 
 # Optional shortcut for local/private repositories.
@@ -46,8 +50,8 @@ MAKEFILE_SESSION_TOKENS ?=
 
 SESSION_TOKEN_FOR_K6 := $(or $(SESSION_TOKEN),$(MAKEFILE_SESSION_TOKEN))
 SESSION_TOKENS_FOR_K6 := $(or $(SESSION_TOKENS),$(MAKEFILE_SESSION_TOKENS))
-PUBLIC_VUS_FOR_K6 := $(or $(USERS),$(VUS))
-AUTH_VUS_FOR_K6 := $(or $(USERS),$(AUTH_VUS))
+PUBLIC_VUS_FOR_K6 := $(or $(REQUESTED_USERS),$(VUS))
+AUTH_VUS_FOR_K6 := $(or $(REQUESTED_USERS),$(AUTH_VUS))
 TOKENS_FILE_ABS := $(abspath $(TOKENS_FILE))
 
 help:
@@ -58,6 +62,8 @@ help:
 	@echo "  make init             Prepare local .env and tokens.txt"
 	@echo "  make check            Check k6 installation"
 	@echo "  make ping             Check API host and /health response"
+	@echo "  make public 200       Public read-only with 200 VUs, Russian report"
+	@echo "  make auth 5           Auth read-only with 5 VUs"
 	@echo "  make public USERS=50  Public read-only with any VUs, Russian report"
 	@echo "  make auth USERS=5     Auth read-only with any VUs"
 	@echo "  make public-10        Public read-only, 10 VUs, Russian report"
@@ -83,9 +89,18 @@ help:
 	@echo ""
 	@echo "Config:"
 	@echo "  Put tokens in $(TOKENS_FILE), set SESSION_TOKEN locally, or paste into MAKEFILE_SESSION_TOKEN."
-	@echo "  Override users inline: make public USERS=50"
+	@echo "  Override users inline: make public 50 or make public USERS=50"
 	@echo "  Override timing inline: USERS=50 HOLD=1m make public"
 	@echo "  Disable report auto-open: OPEN_REPORT=false make auth-1"
+
+%:
+	@if printf '%s\n' "$@" | grep -Eq '^[0-9]+$$'; then \
+		:; \
+	else \
+		echo "Unknown target: $@"; \
+		echo "Run make help"; \
+		exit 2; \
+	fi
 
 start: setup
 

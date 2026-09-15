@@ -20,8 +20,8 @@ Do not commit real tokens, `.env` files, or generated reports.
 ```bash
 make help
 make ping
-make public USERS=50
-make auth USERS=5
+make public 50
+make auth 5
 make auth-1
 make auth-dashboard
 ```
@@ -35,8 +35,8 @@ Render/Grafana observability config is included:
 
 ```bash
 make grafana-check
-make public-grafana USERS=10
-make auth-grafana USERS=1
+make public-grafana 10
+make auth-grafana 1
 ```
 
 See [observability/README.md](./observability/README.md).

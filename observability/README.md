@@ -38,8 +38,8 @@ Do not commit `.env`.
 ## Run
 
 ```bash
-make public-grafana USERS=10
-make auth-grafana USERS=1
+make public-grafana 10
+make auth-grafana 1
 ```
 
 Each run gets a `TEST_ID`. Use it in the Grafana dashboard filter.
