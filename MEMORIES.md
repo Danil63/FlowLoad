@@ -55,8 +55,6 @@ open load-testing/k6/tokens.txt
 | `make auth 50` | Authenticated game open base load | `GET /profile`, `GET /aircraft`, `GET /quests`, `GET /collections/me`, `GET /raffles/me`, `GET /wheel/rewards`, `GET /carousel` | No | HTTP errors below 1%, p95 below 1000 ms, p99 below 2000 ms |
 | `make flight-once` | Critical flight flow | `POST /flights/start`, `POST /flights/{flightId}/complete`, `GET /profile` before and after | Yes | Flight starts, completes, returns reward, profile stays consistent |
 | `make browser` | Mobile browser smoke | Frontend page, session cookie injection, mobile viewport, simple takeoff tap | Can change state if flight starts | Game opens, canvas appears, screenshots are saved |
-| `make public-grafana 10` | Public load with Grafana metrics | Same as `make public` | No | Metrics appear in Grafana under the printed `TEST_ID` |
-| `make auth-grafana 1` | Auth load with Grafana metrics | Same as `make auth` | No | Metrics and run logs appear in Grafana under the printed `TEST_ID` |
 
 ## Business Flows
 
@@ -156,14 +154,31 @@ make flight-once
 make browser
 ```
 
-## Grafana
+## Current Findings
 
-Use Grafana only after observability is deployed and local `.env` has gateway settings:
+The k6 scenarios and Makefile commands are working correctly when reports show:
 
-```bash
-make grafana-check
-make public-grafana 10
-make auth-grafana 1
+| Signal | Meaning |
+| --- | --- |
+| HTTP errors `0.00%` | Requests are reaching the API and receiving valid responses |
+| Checks `100.00%` | The scenario assertions are passing |
+| Failed `p95`/`p99` thresholds | The API works functionally, but response time is above the target |
+
+For the public read-only scenario, remember that one VU sends a batch of six API requests:
+
+```text
+effective parallel pressure ~= VUs * 6 endpoints
 ```
 
-The printed `TEST_ID` is used to filter the run in Grafana.
+Example: `make public 100` can create waves of roughly 600 concurrent endpoint
+requests. If errors appear as `EOF`, `connection reset by peer`, or `request timeout`,
+the current load is above what the tested path can reliably handle.
+
+Recent interpretation rule:
+
+| Result pattern | Interpretation |
+| --- | --- |
+| `0%` HTTP errors, `100%` checks, failed latency thresholds | Test is correct; infrastructure/API is stable but too slow for the chosen SLA |
+| Many `EOF`, `connection reset by peer`, or `request timeout` errors | Load is too high for current server/network path |
+| `401/403` on `make auth-status` | Token is invalid, expired, or not accepted by the API |
+| `make auth-status 120` | Incorrect command shape; `auth-status` is a one-user diagnostic, use `make auth 120` for load |
