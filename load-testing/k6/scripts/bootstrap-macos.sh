@@ -24,6 +24,10 @@ save_local_token() {
 }
 
 prompt_for_token() {
+  if [ "${SKIP_TOKEN_PROMPT:-false}" = "true" ]; then
+    return
+  fi
+
   if [ "${FORCE_TOKEN_PROMPT:-false}" != "true" ] && has_real_tokens; then
     echo "Token file already has local tokens: $TOKENS_FILE"
     return
@@ -95,6 +99,13 @@ else
   echo "k6 is already installed: $(k6 version)"
 fi
 
+if ! command -v node >/dev/null 2>&1; then
+  echo "Installing Node.js for the local web UI..."
+  brew install node
+else
+  echo "Node.js is already installed: $(node --version)"
+fi
+
 if [ "${INSTALL_BROWSER:-false}" = "true" ]; then
   if [ ! -x "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" ]; then
     echo "Installing Google Chrome for k6 browser tests..."
@@ -122,7 +133,11 @@ echo ""
 echo "Bootstrap complete."
 echo ""
 echo "Next:"
-echo "  Run a test, for example: make auth-1"
+if [ "${SKIP_TOKEN_PROMPT:-false}" = "true" ]; then
+  echo "  The local web UI will open now."
+else
+  echo "  Run a test, for example: make auth-1"
+fi
 echo ""
 echo "Useful checks:"
 echo "  make check"

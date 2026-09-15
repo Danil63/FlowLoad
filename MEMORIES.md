@@ -11,11 +11,15 @@ Use this path on a clean Mac:
 git clone https://github.com/Danil63/big-journey-k6-load-tests.git
 cd big-journey-k6-load-tests
 make start
-make auth-status
-make auth-1
 ```
 
-During `make start`, paste your own session token when the terminal asks for it.
+`make start` installs dependencies and opens the local web UI:
+
+```text
+http://127.0.0.1:8787
+```
+
+Paste your own session token in the UI before auth tests.
 The token is saved locally to `load-testing/k6/tokens.txt`, which is ignored by git.
 Do not store the token in repository files.
 
@@ -37,6 +41,7 @@ open load-testing/k6/tokens.txt
 | --- | --- | --- |
 | `make check` | Checks that k6 is installed | k6 version is printed |
 | `make help` | Shows available commands | Command list is printed |
+| `make ui` | Opens the local web UI | `http://127.0.0.1:8787` opens locally |
 | `make ping` | Checks API availability through `/health` | HTTP 200 |
 | `make auth-status` | Checks auth token against protected read endpoints | Every endpoint returns HTTP 200 |
 

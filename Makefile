@@ -1,6 +1,6 @@
 .DEFAULT_GOAL := help
 
-.PHONY: help start setup token init check ping public public-report public-10 public-50 public-100 public-300 auth auth-report auth-dashboard auth-status auth-debug auth-1 auth-5 auth-50 auth-100 flight-once browser browser-dashboard grafana-check public-grafana auth-grafana dist dist-public dist-auth dist-flight k6-check k6-public k6-public-report k6-auth k6-auth-dashboard k6-auth-report k6-auth-status k6-flight-once k6-browser-flight-smoke k6-browser-flight-dashboard k6-grafana k6-distributed
+.PHONY: help start setup token init ui check ping public public-report public-10 public-50 public-100 public-300 auth auth-report auth-dashboard auth-status auth-debug auth-1 auth-5 auth-50 auth-100 flight-once browser browser-dashboard grafana-check public-grafana auth-grafana dist dist-public dist-auth dist-flight k6-check k6-public k6-public-report k6-auth k6-auth-dashboard k6-auth-report k6-auth-status k6-flight-once k6-browser-flight-smoke k6-browser-flight-dashboard k6-grafana k6-distributed
 
 K6_DIR := load-testing/k6
 K6_SCENARIOS := $(K6_DIR)/scenarios
@@ -30,6 +30,7 @@ BROWSER_ITERATIONS ?= 1
 FLIGHT_OBSERVE_SECONDS ?= 20
 K6_BROWSER_HEADLESS ?= false
 OPEN_REPORT ?= true
+UI_PORT ?= 8787
 GRAFANA_GATEWAY_URL ?=
 GRAFANA_PUSH_TOKEN ?=
 MODE ?= auth
@@ -56,10 +57,11 @@ TOKENS_FILE_ABS := $(abspath $(TOKENS_FILE))
 
 help:
 	@echo "Short k6 commands:"
-	@echo "  make start            First setup on a new Mac: install k6 and prepare token file"
-	@echo "  make setup            Install k6 on macOS and prepare local files"
+	@echo "  make start            Install dependencies and open local web UI"
+	@echo "  make setup            Install k6/Node.js on macOS and prepare local files"
 	@echo "  make token            Replace local session token safely"
 	@echo "  make init             Prepare local .env and tokens.txt"
+	@echo "  make ui               Open local web UI"
 	@echo "  make check            Check k6 installation"
 	@echo "  make ping             Check API host and /health response"
 	@echo "  make public 200       Public read-only with 200 VUs, Russian report"
@@ -88,7 +90,7 @@ help:
 	@echo "  make dist-flight      Distributed flight mode, state-changing"
 	@echo ""
 	@echo "Config:"
-	@echo "  Run make start or make token to save the local session token in $(TOKENS_FILE)."
+	@echo "  Save the local session token in the web UI or by running make token."
 	@echo "  Override users inline: make public 50 or make public USERS=50"
 	@echo "  Override timing inline: USERS=50 HOLD=1m make public"
 	@echo "  Load-test commands create and open an HTML report by default."
@@ -103,13 +105,18 @@ help:
 		exit 2; \
 	fi
 
-start: setup
+start:
+	@SKIP_TOKEN_PROMPT=true load-testing/k6/scripts/bootstrap-macos.sh
+	@$(MAKE) --no-print-directory ui
 
 setup:
 	@load-testing/k6/scripts/bootstrap-macos.sh
 
 token:
 	@FORCE_TOKEN_PROMPT=true load-testing/k6/scripts/bootstrap-macos.sh
+
+ui:
+	@PORT="$(UI_PORT)" node ui/server.mjs
 
 init:
 	@test -f $(K6_ENV) || cp $(K6_DIR)/.env.example $(K6_ENV)

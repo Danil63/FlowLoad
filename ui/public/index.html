@@ -1,0 +1,70 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>k6 Load UI</title>
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <main class="shell">
+    <section class="topbar">
+      <div>
+        <h1>k6 Load UI</h1>
+        <p id="statusText">Проверка окружения...</p>
+      </div>
+      <button id="refreshButton" type="button">Обновить</button>
+    </section>
+
+    <section class="grid">
+      <form id="tokenForm" class="panel">
+        <h2>Токен</h2>
+        <label for="tokenInput">SESSION_TOKEN</label>
+        <div class="inline">
+          <input id="tokenInput" type="password" autocomplete="off" placeholder="Вставь токен сессии">
+          <button type="submit">Сохранить</button>
+        </div>
+        <p id="tokenState" class="muted">Токен не проверен</p>
+      </form>
+
+      <form id="runForm" class="panel">
+        <h2>Запуск</h2>
+        <label for="commandSelect">Сценарий</label>
+        <select id="commandSelect">
+          <option value="public">public</option>
+          <option value="auth">auth</option>
+          <option value="auth-status">auth-status</option>
+          <option value="auth-1">auth-1</option>
+          <option value="auth-5">auth-5</option>
+          <option value="auth-50">auth-50</option>
+          <option value="browser">browser</option>
+          <option value="ping">ping</option>
+        </select>
+
+        <label for="usersInput">Пользователи</label>
+        <input id="usersInput" type="number" min="1" max="10000" value="10">
+
+        <button id="runButton" type="submit">Запустить</button>
+      </form>
+    </section>
+
+    <section class="panel">
+      <div class="sectionHead">
+        <h2>Текущий запуск</h2>
+        <span id="runBadge" class="badge idle">Нет запуска</span>
+      </div>
+      <pre id="runOutput"></pre>
+    </section>
+
+    <section class="panel">
+      <div class="sectionHead">
+        <h2>Отчеты</h2>
+        <button id="reportsButton" type="button">Обновить</button>
+      </div>
+      <div id="reportsList" class="reports"></div>
+    </section>
+  </main>
+
+  <script src="/app.js" type="module"></script>
+</body>
+</html>

@@ -8,11 +8,15 @@ k6 load-testing project for the Big Journey web game.
 git clone https://github.com/Danil63/big-journey-k6-load-tests.git
 cd big-journey-k6-load-tests
 make start
-make auth-status
-make auth-1
 ```
 
-During `make start`, paste your own local session token when the terminal asks for it.
+`make start` installs the local dependencies and opens the web UI:
+
+```text
+http://127.0.0.1:8787
+```
+
+Paste your own local session token in the UI before auth tests.
 It is saved only on your Mac in `load-testing/k6/tokens.txt`.
 Do not commit real tokens, `.env` files, browser session dumps, or generated reports.
 
@@ -20,6 +24,7 @@ Do not commit real tokens, `.env` files, browser session dumps, or generated rep
 
 ```bash
 make help
+make ui
 make ping
 make public 50
 make auth 5

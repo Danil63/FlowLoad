@@ -28,7 +28,15 @@ After cloning the repository, run this once from the repository root:
 make start
 ```
 
-This installs Homebrew if needed, installs k6, creates local `.env` and `tokens.txt` files, and can securely ask for a session token without printing it in the terminal.
+This installs Homebrew if needed, installs k6 and Node.js, creates local `.env`
+and `tokens.txt` files, starts the local web UI, and opens it in the browser:
+
+```text
+http://127.0.0.1:8787
+```
+
+Paste the session token in the UI before auth tests. The token is saved locally
+to `load-testing/k6/tokens.txt` and ignored by git.
 
 If you also want browser tests on a clean Mac, install Google Chrome during bootstrap:
 
@@ -36,7 +44,13 @@ If you also want browser tests on a clean Mac, install Google Chrome during boot
 INSTALL_BROWSER=true make start
 ```
 
-Then the second command can already be a test:
+The old terminal token prompt is still available:
+
+```bash
+make token
+```
+
+Tests can still be launched from terminal:
 
 ```bash
 make auth-1
@@ -66,6 +80,12 @@ First-time local setup:
 
 ```bash
 make start
+```
+
+Open the local web UI without reinstalling dependencies:
+
+```bash
+make ui
 ```
 
 Distributed run across several laptops:
