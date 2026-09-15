@@ -11,8 +11,25 @@ const runOutput = document.querySelector('#runOutput');
 const reportsList = document.querySelector('#reportsList');
 const refreshButton = document.querySelector('#refreshButton');
 const reportsButton = document.querySelector('#reportsButton');
+const swaggerInput = document.querySelector('#swaggerInput');
+const swaggerState = document.querySelector('#swaggerState');
+const methodSearchInput = document.querySelector('#methodSearchInput');
+const routeNameInput = document.querySelector('#routeNameInput');
+const methodList = document.querySelector('#methodList');
+const methodCount = document.querySelector('#methodCount');
+const routeSteps = document.querySelector('#routeSteps');
+const connectButton = document.querySelector('#connectButton');
+const clearRouteButton = document.querySelector('#clearRouteButton');
+const saveRouteButton = document.querySelector('#saveRouteButton');
+const routesRefreshButton = document.querySelector('#routesRefreshButton');
+const savedRoutesList = document.querySelector('#savedRoutesList');
 
 let pollTimer = null;
+let endpoints = [];
+let selectedEndpointIds = [];
+let route = [];
+
+const workspaceStorageKey = 'bigJourneyK6RouteBuilder';
 
 async function requestJson(url, options = {}) {
   const response = await fetch(url, {
@@ -57,6 +74,179 @@ function renderReports(reports) {
     .join('');
 }
 
+function escapeHtml(value) {
+  return String(value)
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;')
+    .replaceAll('"', '&quot;')
+    .replaceAll("'", '&#039;');
+}
+
+function riskLabel(risk) {
+  const labels = {
+    read: 'read-only',
+    write: 'изменяет данные',
+    danger: 'осторожно',
+  };
+
+  return labels[risk] || risk;
+}
+
+function methodClass(method) {
+  return `method method-${method.toLowerCase()}`;
+}
+
+function selectedEndpoint(id) {
+  return endpoints.find((endpoint) => endpoint.id === id);
+}
+
+function filteredEndpoints() {
+  const query = methodSearchInput.value.trim().toLowerCase();
+  if (!query) return endpoints;
+
+  return endpoints.filter((endpoint) => {
+    const haystack = [
+      endpoint.method,
+      endpoint.path,
+      endpoint.summary,
+      endpoint.operationId,
+      endpoint.tags.join(' '),
+      endpoint.risk,
+    ]
+      .join(' ')
+      .toLowerCase();
+
+    return haystack.includes(query);
+  });
+}
+
+function updateRouteControls() {
+  connectButton.disabled = selectedEndpointIds.length !== 2;
+  saveRouteButton.disabled = route.length === 0;
+}
+
+function renderMethods() {
+  const visibleEndpoints = filteredEndpoints();
+  methodCount.textContent = `${visibleEndpoints.length} из ${endpoints.length} методов`;
+
+  if (!endpoints.length) {
+    methodList.innerHTML = '<p class="muted">Пока нет загруженных методов.</p>';
+    updateRouteControls();
+    return;
+  }
+
+  if (!visibleEndpoints.length) {
+    methodList.innerHTML = '<p class="muted">Ничего не найдено. Попробуй другой запрос.</p>';
+    updateRouteControls();
+    return;
+  }
+
+  methodList.innerHTML = visibleEndpoints
+    .map((endpoint) => {
+      const selected = selectedEndpointIds.includes(endpoint.id) ? ' selected' : '';
+      const summary = endpoint.summary ? `<p>${escapeHtml(endpoint.summary)}</p>` : '';
+      const auth = endpoint.authRequired ? '<span class="metaPill">auth</span>' : '<span class="metaPill">public</span>';
+
+      return `<button class="methodCard${selected}" type="button" data-endpoint-id="${escapeHtml(endpoint.id)}">
+        <span class="methodCardTop">
+          <span class="${methodClass(endpoint.method)}">${escapeHtml(endpoint.method)}</span>
+          <span class="risk risk-${escapeHtml(endpoint.risk)}">${escapeHtml(riskLabel(endpoint.risk))}</span>
+        </span>
+        <strong>${escapeHtml(endpoint.path)}</strong>
+        ${summary}
+        <span class="methodMeta">${auth}<span class="metaPill">${escapeHtml(endpoint.tags[0] || 'api')}</span></span>
+      </button>`;
+    })
+    .join('');
+
+  updateRouteControls();
+}
+
+function renderRoute() {
+  if (!route.length) {
+    routeSteps.className = 'routeSteps empty';
+    routeSteps.textContent = 'Методы появятся здесь после добавления в маршрут.';
+    updateRouteControls();
+    return;
+  }
+
+  routeSteps.className = 'routeSteps';
+  routeSteps.innerHTML = route
+    .map((step, index) => {
+      const summary = step.summary ? `<p>${escapeHtml(step.summary)}</p>` : '';
+      const moveUpDisabled = index === 0 ? ' disabled' : '';
+      const moveDownDisabled = index === route.length - 1 ? ' disabled' : '';
+
+      return `<div class="routeStep">
+        <div class="routeStepIndex">${index + 1}</div>
+        <div class="routeStepBody">
+          <span class="${methodClass(step.method)}">${escapeHtml(step.method)}</span>
+          <strong>${escapeHtml(step.path)}</strong>
+          ${summary}
+        </div>
+        <div class="stepActions">
+          <button class="iconButton" type="button" data-action="up" data-index="${index}"${moveUpDisabled} title="Выше">↑</button>
+          <button class="iconButton" type="button" data-action="down" data-index="${index}"${moveDownDisabled} title="Ниже">↓</button>
+          <button class="iconButton dangerButton" type="button" data-action="remove" data-index="${index}" title="Удалить">×</button>
+        </div>
+      </div>`;
+    })
+    .join('');
+
+  updateRouteControls();
+}
+
+function renderSavedRoutes(routes = []) {
+  if (!routes.length) {
+    savedRoutesList.innerHTML = '<p class="muted">Сохраненных маршрутов пока нет.</p>';
+    return;
+  }
+
+  savedRoutesList.innerHTML = routes
+    .map((savedRoute) => {
+      const date = new Date(savedRoute.updatedAt).toLocaleString('ru-RU');
+      return `<div class="savedRoute">
+        <strong>${escapeHtml(savedRoute.name)}</strong>
+        <span>${savedRoute.stepsCount} шагов · ${date}</span>
+      </div>`;
+    })
+    .join('');
+}
+
+function saveWorkspace() {
+  localStorage.setItem(
+    workspaceStorageKey,
+    JSON.stringify({
+      endpoints,
+      route,
+      routeName: routeNameInput.value,
+      savedAt: Date.now(),
+    }),
+  );
+}
+
+function restoreWorkspace() {
+  try {
+    const raw = localStorage.getItem(workspaceStorageKey);
+    if (!raw) return;
+
+    const saved = JSON.parse(raw);
+    endpoints = Array.isArray(saved.endpoints) ? saved.endpoints : [];
+    route = Array.isArray(saved.route) ? saved.route : [];
+
+    if (saved.routeName) {
+      routeNameInput.value = saved.routeName;
+    }
+
+    if (endpoints.length) {
+      swaggerState.textContent = `Восстановлено ${endpoints.length} методов из прошлого сеанса.`;
+    }
+  } catch (_error) {
+    localStorage.removeItem(workspaceStorageKey);
+  }
+}
+
 function renderRun(run) {
   if (!run) {
     setBadge('idle');
@@ -79,10 +269,44 @@ async function refresh() {
   tokenState.textContent = data.tokenReady ? 'Токен сохранен локально' : 'Токен нужен для auth-сценариев';
   renderRun(data.activeRun);
   renderReports(data.reports);
+  renderSavedRoutes(data.routes || []);
 
   if (data.activeRunId && !pollTimer) {
     startPolling();
   }
+}
+
+function toggleEndpointSelection(endpointId) {
+  if (selectedEndpointIds.includes(endpointId)) {
+    selectedEndpointIds = selectedEndpointIds.filter((id) => id !== endpointId);
+  } else {
+    selectedEndpointIds = [...selectedEndpointIds, endpointId].slice(-2);
+  }
+
+  renderMethods();
+}
+
+function addEndpointToRoute(endpoint) {
+  if (!endpoint) return;
+  route.push({
+    method: endpoint.method,
+    path: endpoint.path,
+    summary: endpoint.summary,
+    operationId: endpoint.operationId,
+    tags: endpoint.tags,
+    authRequired: endpoint.authRequired,
+    risk: endpoint.risk,
+    expectStatus: 200,
+  });
+  saveWorkspace();
+}
+
+function moveRouteStep(fromIndex, toIndex) {
+  if (toIndex < 0 || toIndex >= route.length) return;
+  const [step] = route.splice(fromIndex, 1);
+  route.splice(toIndex, 0, step);
+  saveWorkspace();
+  renderRoute();
 }
 
 function startPolling() {
@@ -140,8 +364,107 @@ commandSelect.addEventListener('change', () => {
 
 refreshButton.addEventListener('click', refresh);
 reportsButton.addEventListener('click', refresh);
+routesRefreshButton.addEventListener('click', refresh);
+
+swaggerInput.addEventListener('change', async () => {
+  const file = swaggerInput.files?.[0];
+  if (!file) return;
+
+  swaggerState.textContent = `Читаю ${file.name}...`;
+
+  try {
+    const content = await file.text();
+    const data = await requestJson('/api/swagger', {
+      method: 'POST',
+      body: JSON.stringify({ name: file.name, content }),
+    });
+
+    endpoints = data.endpoints;
+    selectedEndpointIds = [];
+    route = [];
+    swaggerState.textContent = `${data.title || file.name}: найдено ${endpoints.length} методов.`;
+    saveWorkspace();
+    renderMethods();
+    renderRoute();
+  } catch (error) {
+    endpoints = [];
+    selectedEndpointIds = [];
+    route = [];
+    localStorage.removeItem(workspaceStorageKey);
+    swaggerState.textContent = error.message;
+    renderMethods();
+    renderRoute();
+  } finally {
+    swaggerInput.value = '';
+  }
+});
+
+methodSearchInput.addEventListener('input', renderMethods);
+
+methodList.addEventListener('click', (event) => {
+  const card = event.target.closest('[data-endpoint-id]');
+  if (!card) return;
+
+  toggleEndpointSelection(card.dataset.endpointId);
+});
+
+connectButton.addEventListener('click', () => {
+  selectedEndpointIds.map(selectedEndpoint).forEach(addEndpointToRoute);
+  selectedEndpointIds = [];
+  renderMethods();
+  renderRoute();
+});
+
+routeSteps.addEventListener('click', (event) => {
+  const button = event.target.closest('[data-action]');
+  if (!button) return;
+
+  const index = Number(button.dataset.index);
+  if (button.dataset.action === 'remove') {
+    route.splice(index, 1);
+    saveWorkspace();
+    renderRoute();
+  }
+
+  if (button.dataset.action === 'up') {
+    moveRouteStep(index, index - 1);
+  }
+
+  if (button.dataset.action === 'down') {
+    moveRouteStep(index, index + 1);
+  }
+});
+
+clearRouteButton.addEventListener('click', () => {
+  route = [];
+  selectedEndpointIds = [];
+  saveWorkspace();
+  renderMethods();
+  renderRoute();
+});
+
+routeNameInput.addEventListener('input', saveWorkspace);
+
+saveRouteButton.addEventListener('click', async () => {
+  const name = routeNameInput.value.trim();
+
+  try {
+    const data = await requestJson('/api/routes', {
+      method: 'POST',
+      body: JSON.stringify({ name, steps: route }),
+    });
+
+    swaggerState.textContent = `Маршрут "${data.route.name}" сохранен: ${data.route.stepsCount} шагов.`;
+    await refresh();
+  } catch (error) {
+    swaggerState.textContent = error.message;
+  }
+});
 
 commandSelect.dispatchEvent(new Event('change'));
+restoreWorkspace();
+renderMethods();
+renderRoute();
 refresh().catch((error) => {
   statusText.textContent = error.message;
 });

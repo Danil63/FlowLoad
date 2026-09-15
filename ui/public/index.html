@@ -48,6 +48,60 @@
       </form>
     </section>
 
+    <section class="panel routeBuilder">
+      <div class="sectionHead">
+        <div>
+          <h2>Конструктор маршрута</h2>
+          <p id="swaggerState" class="muted">Загрузи Swagger/OpenAPI файл, чтобы собрать маршрут из методов.</p>
+        </div>
+        <label class="fileButton" for="swaggerInput">Загрузить Swagger</label>
+        <input id="swaggerInput" class="visuallyHidden" type="file" accept=".json,.yaml,.yml,application/json,text/yaml,text/x-yaml">
+      </div>
+
+      <div class="routeTools">
+        <label>
+          Поиск метода
+          <input id="methodSearchInput" type="search" placeholder="GET /routes, shop, profile">
+        </label>
+        <label>
+          Название маршрута
+          <input id="routeNameInput" type="text" placeholder="game-open-smoke" value="game-open-smoke">
+        </label>
+      </div>
+
+      <div class="board">
+        <div class="routeCanvas">
+          <div class="routeCanvasHead">
+            <span>Маршрут</span>
+            <div class="routeActions">
+              <button id="connectButton" class="secondary" type="button" disabled>Соединить выбранные</button>
+              <button id="clearRouteButton" class="ghost" type="button">Очистить</button>
+              <button id="saveRouteButton" type="button" disabled>Сохранить</button>
+            </div>
+          </div>
+          <div id="routeSteps" class="routeSteps empty">Методы появятся здесь после добавления в маршрут.</div>
+        </div>
+
+        <div class="methodShelf">
+          <div class="shelfHead">
+            <span>Методы из Swagger</span>
+            <span id="methodCount" class="muted">0 методов</span>
+          </div>
+          <div id="methodList" class="methodList">
+            <p class="muted">Пока нет загруженных методов.</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="savedRoutes">
+        <div class="sectionHead compact">
+          <h3>Сохраненные маршруты</h3>
+          <button id="routesRefreshButton" class="ghost" type="button">Обновить</button>
+        </div>
+        <div id="savedRoutesList" class="savedRoutesList"></div>
+      </div>
+    </section>
+
     <section class="panel">
       <div class="sectionHead">
         <h2>Текущий запуск</h2>

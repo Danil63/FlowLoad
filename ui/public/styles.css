@@ -7,12 +7,17 @@
   --line: #d8dee8;
   --accent: #1d4ed8;
   --accent-hover: #173fae;
+  --accent-soft: #eaf1ff;
   --ok-bg: #e8f6ef;
   --ok: #0f7a4f;
   --bad-bg: #fdeceb;
   --bad: #b42318;
   --wait-bg: #fff4d6;
   --wait: #8a5a00;
+  --orange-bg: #fff1e8;
+  --orange: #b54708;
+  --violet-bg: #f1ecff;
+  --violet: #5b35b1;
 }
 
 * {
@@ -48,6 +53,7 @@ body {
 
 h1,
 h2,
+h3,
 p {
   margin: 0;
 }
@@ -60,6 +66,12 @@ h1 {
 
 h2 {
   font-size: 18px;
+  line-height: 1.25;
+  letter-spacing: 0;
+}
+
+h3 {
+  font-size: 15px;
   line-height: 1.25;
   letter-spacing: 0;
 }
@@ -124,6 +136,25 @@ button:hover {
   background: var(--accent-hover);
 }
 
+button.secondary {
+  background: #26364f;
+}
+
+button.secondary:hover {
+  background: #1b283d;
+}
+
+button.ghost {
+  border: 1px solid var(--line);
+  background: #ffffff;
+  color: var(--text);
+}
+
+button.ghost:hover {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+
 button:disabled {
   cursor: not-allowed;
   opacity: 0.55;
@@ -131,6 +162,35 @@ button:disabled {
 
 .inline input {
   min-width: 0;
+}
+
+.visuallyHidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+}
+
+.fileButton {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: 42px;
+  margin: 0;
+  border-radius: 8px;
+  background: var(--accent);
+  color: #ffffff;
+  padding: 0 16px;
+  font-size: 14px;
+  font-weight: 700;
+  text-transform: none;
+  cursor: pointer;
+}
+
+.fileButton:hover {
+  background: var(--accent-hover);
 }
 
 #runButton {
@@ -208,9 +268,303 @@ pre {
   white-space: nowrap;
 }
 
+.routeBuilder {
+  margin-bottom: 16px;
+}
+
+.compact {
+  align-items: center;
+}
+
+.routeTools {
+  display: grid;
+  grid-template-columns: minmax(0, 1.3fr) minmax(220px, 0.7fr);
+  gap: 14px;
+  margin-top: 18px;
+}
+
+.board {
+  display: grid;
+  grid-template-rows: minmax(220px, auto) auto;
+  gap: 14px;
+  margin-top: 16px;
+}
+
+.routeCanvas,
+.methodShelf,
+.savedRoutes {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fbfcff;
+}
+
+.routeCanvas {
+  min-height: 250px;
+  padding: 14px;
+}
+
+.routeCanvasHead,
+.shelfHead {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 800;
+  letter-spacing: 0;
+  text-transform: uppercase;
+}
+
+.routeActions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.routeActions button {
+  height: 34px;
+}
+
+.routeSteps {
+  display: grid;
+  grid-auto-flow: column;
+  grid-auto-columns: minmax(230px, 320px);
+  gap: 14px;
+  margin-top: 16px;
+  overflow-x: auto;
+  padding: 0 4px 8px 0;
+  scroll-snap-type: x proximity;
+}
+
+.routeSteps.empty {
+  display: grid;
+  min-height: 170px;
+  place-items: center;
+  border: 1px dashed var(--line);
+  border-radius: 8px;
+  color: var(--muted);
+  text-align: center;
+}
+
+.routeStep {
+  position: relative;
+  display: grid;
+  grid-template-columns: 30px minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: start;
+  min-height: 122px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #ffffff;
+  padding: 12px;
+  scroll-snap-align: start;
+}
+
+.routeStep::after {
+  content: "→";
+  position: absolute;
+  right: -14px;
+  top: 45%;
+  color: var(--muted);
+  font-weight: 800;
+}
+
+.routeStep:last-child::after {
+  display: none;
+}
+
+.routeStepIndex {
+  display: grid;
+  width: 30px;
+  height: 30px;
+  place-items: center;
+  border-radius: 50%;
+  background: #eef1f5;
+  color: var(--text);
+  font-weight: 800;
+}
+
+.routeStepBody {
+  display: grid;
+  min-width: 0;
+  gap: 7px;
+}
+
+.routeStepBody strong,
+.methodCard strong {
+  overflow-wrap: anywhere;
+}
+
+.routeStepBody p,
+.methodCard p {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.stepActions {
+  display: grid;
+  gap: 6px;
+}
+
+.iconButton {
+  display: grid;
+  width: 28px;
+  height: 28px;
+  place-items: center;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #ffffff;
+  color: var(--text);
+  padding: 0;
+}
+
+.iconButton:hover {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.dangerButton {
+  color: var(--bad);
+}
+
+.methodShelf {
+  padding: 14px;
+}
+
+.methodList {
+  display: grid;
+  grid-auto-flow: column;
+  grid-auto-columns: minmax(240px, 300px);
+  gap: 10px;
+  min-height: 150px;
+  overflow-x: auto;
+  padding: 12px 2px 4px;
+  scroll-snap-type: x proximity;
+}
+
+.methodCard {
+  display: grid;
+  min-height: 134px;
+  align-content: start;
+  gap: 8px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #ffffff;
+  color: var(--text);
+  padding: 12px;
+  text-align: left;
+  white-space: normal;
+  scroll-snap-align: start;
+}
+
+.methodCard:hover,
+.methodCard.selected {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.methodCardTop,
+.methodMeta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+
+.method,
+.risk,
+.metaPill {
+  display: inline-flex;
+  align-items: center;
+  width: fit-content;
+  min-height: 24px;
+  border-radius: 999px;
+  padding: 0 8px;
+  font-size: 11px;
+  font-weight: 800;
+  line-height: 1;
+}
+
+.method-get,
+.method-head,
+.method-options {
+  background: var(--ok-bg);
+  color: var(--ok);
+}
+
+.method-post {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+.method-put,
+.method-patch {
+  background: var(--wait-bg);
+  color: var(--wait);
+}
+
+.method-delete {
+  background: var(--bad-bg);
+  color: var(--bad);
+}
+
+.risk-read {
+  background: #eef1f5;
+  color: var(--muted);
+}
+
+.risk-write {
+  background: var(--orange-bg);
+  color: var(--orange);
+}
+
+.risk-danger {
+  background: var(--bad-bg);
+  color: var(--bad);
+}
+
+.metaPill {
+  background: var(--violet-bg);
+  color: var(--violet);
+  font-weight: 700;
+}
+
+.savedRoutes {
+  margin-top: 14px;
+  padding: 14px;
+}
+
+.savedRoutesList {
+  display: grid;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.savedRoute {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  border-top: 1px solid var(--line);
+  padding-top: 8px;
+}
+
+.savedRoute:first-child {
+  border-top: 0;
+  padding-top: 0;
+}
+
+.savedRoute span {
+  color: var(--muted);
+  white-space: nowrap;
+}
+
 @media (max-width: 760px) {
   .grid,
-  .topbar {
+  .topbar,
+  .routeTools {
     grid-template-columns: 1fr;
     display: grid;
   }
@@ -218,12 +572,41 @@ pre {
   .topbar,
   .sectionHead,
   .inline,
-  .reportLink {
+  .reportLink,
+  .savedRoute {
     align-items: stretch;
     flex-direction: column;
   }
 
-  button {
+  button,
+  .fileButton {
     width: 100%;
+  }
+
+  .routeCanvasHead,
+  .routeActions,
+  .shelfHead {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .routeActions {
+    justify-content: stretch;
+  }
+
+  .routeStep::after {
+    content: "→";
+    right: -14px;
+    top: 45%;
+    bottom: auto;
+  }
+
+  .methodList,
+  .routeSteps {
+    grid-auto-columns: minmax(230px, 86vw);
+  }
+
+  .savedRoute span {
+    white-space: normal;
   }
 }

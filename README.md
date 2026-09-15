@@ -20,6 +20,16 @@ Paste your own local session token in the UI before auth tests.
 It is saved only on your Mac in `load-testing/k6/tokens.txt`.
 Do not commit real tokens, `.env` files, browser session dumps, or generated reports.
 
+The same local UI also has a Swagger/OpenAPI route builder:
+
+1. Upload a `.json`, `.yaml`, or `.yml` Swagger/OpenAPI file.
+2. Search the method list at the bottom of the board.
+3. Select two methods and connect them into a route.
+4. Reorder or remove steps if needed.
+5. Save the route locally.
+
+Saved routes are written to `load-testing/routes/local/` and are ignored by git.
+
 ## Useful Commands
 
 ```bash

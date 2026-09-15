@@ -23,6 +23,11 @@ Paste your own session token in the UI before auth tests.
 The token is saved locally to `load-testing/k6/tokens.txt`, which is ignored by git.
 Do not store the token in repository files.
 
+The local web UI includes a Swagger/OpenAPI route builder. A teammate can upload
+a Swagger file, search methods, select two methods, connect them in sequence, and
+save a local route. Saved route files are created under `load-testing/routes/local/`
+and are ignored by git.
+
 If token setup was skipped:
 
 ```bash
@@ -44,6 +49,28 @@ open load-testing/k6/tokens.txt
 | `make ui` | Opens the local web UI | `http://127.0.0.1:8787` opens locally |
 | `make ping` | Checks API availability through `/health` | HTTP 200 |
 | `make auth-status` | Checks auth token against protected read endpoints | Every endpoint returns HTTP 200 |
+
+## Local Route Builder
+
+Use it when a project needs custom business routes beyond the built-in Big Journey
+scenarios.
+
+| UI step | What it does | Positive result |
+| --- | --- | --- |
+| Upload Swagger/OpenAPI | Reads `.json`, `.yaml`, or `.yml` file and extracts `paths` | Method shelf is filled with API methods |
+| Search methods | Filters by method, path, summary, operation id, tag, or risk | Needed endpoint is easy to find |
+| Select two methods | Marks two cards in the method shelf | `Connect selected` becomes active |
+| Connect selected | Adds the selected methods to the route in order | Route canvas shows numbered steps and arrows |
+| Reorder or remove | Adjusts step order before saving | Final sequence matches the business route |
+| Save route | Writes local `.route.json` file | Route appears in saved route list |
+
+Risk labels in the builder:
+
+| Label | Meaning |
+| --- | --- |
+| `read-only` | Usually safe for load growth, mostly `GET` requests |
+| `изменяет данные` | Mutates data and should be tested carefully |
+| `осторожно` | Can purchase, delete, claim, spin, complete, or otherwise affect game state |
 
 ## Covered Routes By Command
 

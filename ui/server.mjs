@@ -3,6 +3,7 @@ import { createReadStream, promises as fs } from 'node:fs';
 import { spawn } from 'node:child_process';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import YAML from 'yaml';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const rootDir = path.resolve(__dirname, '..');
@@ -10,6 +11,7 @@ const publicDir = path.join(__dirname, 'public');
 const k6Dir = path.join(rootDir, 'load-testing', 'k6');
 const tokensFile = path.join(k6Dir, 'tokens.txt');
 const resultsDir = path.join(k6Dir, 'results');
+const routesDir = path.join(rootDir, 'load-testing', 'routes', 'local');
 const port = Number(process.env.PORT || 8787);
 
 const runs = new Map();
@@ -56,6 +58,124 @@ async function readBody(req) {
   return raw ? JSON.parse(raw) : {};
 }
 
+function parseDocument(content) {
+  const text = String(content || '').trim();
+  if (!text) {
+    throw new Error('Swagger file is empty');
+  }
+
+  try {
+    return JSON.parse(text);
+  } catch (_jsonError) {
+    return YAML.parse(text);
+  }
+}
+
+function methodRisk(method, urlPath) {
+  const normalizedMethod = method.toUpperCase();
+  const normalizedPath = urlPath.toLowerCase();
+  const dangerousWords = /(delete|remove|reset|admin|purchase|checkout|charge|payment|spin|claim|complete|redeem|enter)/;
+
+  if (normalizedMethod === 'DELETE' || dangerousWords.test(normalizedPath)) {
+    return 'danger';
+  }
+
+  if (['POST', 'PUT', 'PATCH'].includes(normalizedMethod)) {
+    return 'write';
+  }
+
+  return 'read';
+}
+
+function operationAuthRequired(rootSecurity, operation) {
+  if (Array.isArray(operation.security)) {
+    return operation.security.length > 0;
+  }
+
+  return Array.isArray(rootSecurity) && rootSecurity.length > 0;
+}
+
+function endpointId(method, urlPath, index) {
+  return `${method.toUpperCase()} ${urlPath} #${index}`;
+}
+
+function extractEndpoints(document) {
+  if (!document || typeof document !== 'object' || !document.paths || typeof document.paths !== 'object') {
+    throw new Error('Swagger/OpenAPI file must contain a paths object');
+  }
+
+  const endpoints = [];
+  const supportedMethods = new Set(['get', 'post', 'put', 'patch', 'delete', 'head', 'options']);
+  let index = 0;
+
+  for (const [urlPath, pathItem] of Object.entries(document.paths)) {
+    if (!pathItem || typeof pathItem !== 'object') continue;
+
+    for (const [method, operation] of Object.entries(pathItem)) {
+      if (!supportedMethods.has(method.toLowerCase())) continue;
+      if (!operation || typeof operation !== 'object') continue;
+
+      index += 1;
+      const normalizedMethod = method.toUpperCase();
+      const tags = Array.isArray(operation.tags) ? operation.tags.map(String) : [];
+
+      endpoints.push({
+        id: endpointId(normalizedMethod, urlPath, index),
+        method: normalizedMethod,
+        path: urlPath,
+        summary: String(operation.summary || operation.description || operation.operationId || '').trim(),
+        operationId: String(operation.operationId || '').trim(),
+        tags,
+        authRequired: operationAuthRequired(document.security, operation),
+        risk: methodRisk(normalizedMethod, urlPath),
+      });
+    }
+  }
+
+  if (!endpoints.length) {
+    throw new Error('No HTTP methods were found in this Swagger/OpenAPI file');
+  }
+
+  return endpoints;
+}
+
+function slugify(value) {
+  const slug = String(value || '')
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9а-яё_-]+/gi, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 80);
+
+  return slug || `route-${Date.now()}`;
+}
+
+async function listRoutes() {
+  try {
+    const entries = await fs.readdir(routesDir, { withFileTypes: true });
+    const routes = [];
+
+    for (const entry of entries) {
+      if (!entry.isFile() || !entry.name.endsWith('.route.json')) continue;
+
+      const fullPath = path.join(routesDir, entry.name);
+      const [raw, stat] = await Promise.all([fs.readFile(fullPath, 'utf8'), fs.stat(fullPath)]);
+      const route = JSON.parse(raw);
+      routes.push({
+        name: route.name || entry.name.replace(/\.route\.json$/, ''),
+        fileName: entry.name,
+        stepsCount: Array.isArray(route.steps) ? route.steps.length : 0,
+        updatedAt: stat.mtimeMs,
+      });
+    }
+
+    routes.sort((a, b) => b.updatedAt - a.updatedAt);
+    return routes;
+  } catch (_error) {
+    return [];
+  }
+}
+
 async function hasRealTokens() {
   try {
     const raw = await fs.readFile(tokensFile, 'utf8');
@@ -93,13 +213,14 @@ async function listReports() {
 }
 
 async function handleStatus(_req, res) {
-  const [tokenReady, reports] = await Promise.all([hasRealTokens(), listReports()]);
+  const [tokenReady, reports, routes] = await Promise.all([hasRealTokens(), listReports(), listRoutes()]);
   json(res, 200, {
     rootDir,
     tokenReady,
     activeRunId,
     activeRun: activeRunId ? runs.get(activeRunId) : null,
     reports,
+    routes,
   });
 }
 
@@ -118,6 +239,67 @@ async function saveToken(req, res) {
   });
   await fs.chmod(tokensFile, 0o600).catch(() => {});
   json(res, 200, { ok: true });
+}
+
+async function parseSwagger(req, res) {
+  const body = await readBody(req);
+  const document = parseDocument(body.content);
+  const endpoints = extractEndpoints(document);
+
+  json(res, 200, {
+    ok: true,
+    name: String(body.name || document.info?.title || 'swagger').trim(),
+    title: document.info?.title || '',
+    version: document.info?.version || '',
+    endpoints,
+  });
+}
+
+async function saveRoute(req, res) {
+  const body = await readBody(req);
+  const name = String(body.name || '').trim();
+  const steps = Array.isArray(body.steps) ? body.steps : [];
+
+  if (!name) {
+    json(res, 400, { error: 'Route name is required' });
+    return;
+  }
+
+  if (!steps.length) {
+    json(res, 400, { error: 'Route must contain at least one method' });
+    return;
+  }
+
+  const route = {
+    name,
+    createdAt: new Date().toISOString(),
+    steps: steps.map((step, index) => ({
+      order: index + 1,
+      method: String(step.method || '').toUpperCase(),
+      path: String(step.path || ''),
+      summary: String(step.summary || ''),
+      operationId: String(step.operationId || ''),
+      tags: Array.isArray(step.tags) ? step.tags.map(String) : [],
+      authRequired: Boolean(step.authRequired),
+      risk: String(step.risk || 'read'),
+      expectStatus: Number(step.expectStatus || 200),
+    })),
+  };
+
+  await fs.mkdir(routesDir, { recursive: true });
+  const fileName = `${slugify(name)}.route.json`;
+  const routePath = path.join(routesDir, fileName);
+  await fs.writeFile(routePath, `${JSON.stringify(route, null, 2)}\n`, { mode: 0o600 });
+  await fs.chmod(routePath, 0o600).catch(() => {});
+
+  json(res, 200, {
+    ok: true,
+    route: {
+      name: route.name,
+      fileName,
+      stepsCount: route.steps.length,
+    },
+  });
 }
 
 function createRun(command, args) {
@@ -266,6 +448,21 @@ const server = createServer(async (req, res) => {
       return;
     }
 
+    if (req.method === 'POST' && url.pathname === '/api/swagger') {
+      await parseSwagger(req, res);
+      return;
+    }
+
+    if (req.method === 'GET' && url.pathname === '/api/routes') {
+      json(res, 200, { routes: await listRoutes() });
+      return;
+    }
+
+    if (req.method === 'POST' && url.pathname === '/api/routes') {
+      await saveRoute(req, res);
+      return;
+    }
+
     if (req.method === 'POST' && url.pathname === '/api/run') {
       await startRun(req, res);
       return;
@@ -298,6 +495,16 @@ function openBrowser(url) {
   const child = spawn(opener, args, { detached: true, stdio: 'ignore' });
   child.unref();
 }
+
+server.on('error', (error) => {
+  if (error.code === 'EADDRINUSE') {
+    console.error(`Port ${port} is already in use. Try UI_PORT=8790 make ui`);
+  } else {
+    console.error(`Local UI failed to start: ${error.message}`);
+  }
+
+  process.exit(1);
+});
 
 server.listen(port, '127.0.0.1', () => {
   const url = `http://127.0.0.1:${port}`;

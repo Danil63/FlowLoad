@@ -3,6 +3,7 @@ set -eu
 
 ROOT_DIR="$(cd "$(dirname "$0")/../../.." && pwd)"
 K6_DIR="$ROOT_DIR/load-testing/k6"
+UI_DIR="$ROOT_DIR/ui"
 ENV_FILE="$K6_DIR/.env"
 TOKENS_FILE="$K6_DIR/tokens.txt"
 
@@ -104,6 +105,15 @@ if ! command -v node >/dev/null 2>&1; then
   brew install node
 else
   echo "Node.js is already installed: $(node --version)"
+fi
+
+if [ -f "$UI_DIR/package.json" ]; then
+  echo "Installing local web UI dependencies..."
+  if [ -f "$UI_DIR/package-lock.json" ]; then
+    npm --prefix "$UI_DIR" ci
+  else
+    npm --prefix "$UI_DIR" install
+  fi
 fi
 
 if [ "${INSTALL_BROWSER:-false}" = "true" ]; then
