@@ -17,6 +17,7 @@ make auth-1
 
 During `make start`, paste your own session token when the terminal asks for it.
 The token is saved locally to `load-testing/k6/tokens.txt`, which is ignored by git.
+Do not store the token in repository files.
 
 If token setup was skipped:
 
@@ -143,6 +144,16 @@ Report commands open the HTML report automatically. To keep the browser closed:
 
 ```bash
 OPEN_REPORT=false make auth-1
+```
+
+The short load-test commands also create and open reports by default:
+
+```bash
+make public 200
+make auth 200
+make auth-status
+make flight-once
+make browser
 ```
 
 ## Grafana

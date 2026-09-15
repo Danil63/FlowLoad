@@ -88,9 +88,10 @@ help:
 	@echo "  make dist-flight      Distributed flight mode, state-changing"
 	@echo ""
 	@echo "Config:"
-	@echo "  Put tokens in $(TOKENS_FILE), set SESSION_TOKEN locally, or paste into MAKEFILE_SESSION_TOKEN."
+	@echo "  Run make start or make token to save the local session token in $(TOKENS_FILE)."
 	@echo "  Override users inline: make public 50 or make public USERS=50"
 	@echo "  Override timing inline: USERS=50 HOLD=1m make public"
+	@echo "  Load-test commands create and open an HTML report by default."
 	@echo "  Disable report auto-open: OPEN_REPORT=false make auth-1"
 
 %:
@@ -140,15 +141,7 @@ public-100:
 public-300:
 	@$(MAKE) --no-print-directory k6-public-report VUS=300 RAMP_UP=1m HOLD=2m RAMP_DOWN=30s
 
-k6-public:
-	@k6 run \
-		-e BASE_URL="$(BASE_URL)" \
-		-e VUS="$(PUBLIC_VUS_FOR_K6)" \
-		-e RAMP_UP="$(RAMP_UP)" \
-		-e HOLD="$(HOLD)" \
-		-e RAMP_DOWN="$(RAMP_DOWN)" \
-		-e THINK_TIME_SECONDS="$(THINK_TIME_SECONDS)" \
-		$(K6_SCENARIOS)/public-readonly.js
+k6-public: k6-public-report
 
 k6-public-report:
 	@mkdir -p $(K6_RESULTS)
@@ -168,7 +161,7 @@ k6-public-report:
 	fi; \
 	exit $$status
 
-auth: k6-auth
+auth: k6-auth-report
 
 auth-report: k6-auth-report
 
@@ -177,7 +170,7 @@ auth-dashboard: k6-auth-dashboard
 auth-status: k6-auth-status
 
 auth-debug:
-	@$(MAKE) --no-print-directory k6-auth AUTH_VUS=1 RAMP_UP=1s HOLD=5s RAMP_DOWN=1s DEBUG_AUTH=true
+	@$(MAKE) --no-print-directory k6-auth-report AUTH_VUS=1 RAMP_UP=1s HOLD=5s RAMP_DOWN=1s DEBUG_AUTH=true
 
 auth-1:
 	@$(MAKE) --no-print-directory k6-auth-report AUTH_VUS=1 RAMP_UP=10s HOLD=30s RAMP_DOWN=10s
@@ -191,25 +184,15 @@ auth-50:
 auth-100:
 	@$(MAKE) --no-print-directory k6-auth-report AUTH_VUS=100 RAMP_UP=1m HOLD=2m RAMP_DOWN=30s
 
-k6-auth:
-	@[ -n "$(SESSION_TOKEN_FOR_K6)$(SESSION_TOKENS_FOR_K6)" ] || [ -f "$(TOKENS_FILE)" ] || (echo "Set SESSION_TOKEN, SESSION_TOKENS, MAKEFILE_SESSION_TOKEN, MAKEFILE_SESSION_TOKENS, or $(TOKENS_FILE) first"; exit 1)
-	@k6 run \
-		-e BASE_URL="$(BASE_URL)" \
-		-e SESSION_TOKEN="$(SESSION_TOKEN_FOR_K6)" \
-		-e SESSION_TOKENS="$(SESSION_TOKENS_FOR_K6)" \
-		-e TOKENS_FILE="$(TOKENS_FILE_ABS)" \
-		-e AUTH_VUS="$(AUTH_VUS_FOR_K6)" \
-		-e RAMP_UP="$(RAMP_UP)" \
-		-e HOLD="$(HOLD)" \
-		-e RAMP_DOWN="$(RAMP_DOWN)" \
-		-e THINK_TIME_SECONDS="$(THINK_TIME_SECONDS)" \
-		-e DEBUG_AUTH="$(DEBUG_AUTH)" \
-		$(K6_SCENARIOS)/auth-game-open.js
+k6-auth: k6-auth-report
 
 k6-auth-dashboard:
-	@[ -n "$(SESSION_TOKEN_FOR_K6)$(SESSION_TOKENS_FOR_K6)" ] || [ -f "$(TOKENS_FILE)" ] || (echo "Set SESSION_TOKEN, SESSION_TOKENS, MAKEFILE_SESSION_TOKEN, MAKEFILE_SESSION_TOKENS, or $(TOKENS_FILE) first"; exit 1)
-	@K6_WEB_DASHBOARD=true \
+	@[ -n "$(SESSION_TOKEN_FOR_K6)$(SESSION_TOKENS_FOR_K6)" ] || [ -f "$(TOKENS_FILE)" ] || (echo "Run make start or make token first"; exit 1)
+	@mkdir -p $(K6_RESULTS)
+	@report="$(K6_RESULTS)/auth-game-open-dashboard-ru-$(REPORT_TS).html"; \
+	K6_WEB_DASHBOARD=true \
 	K6_WEB_DASHBOARD_OPEN=true \
+	RU_REPORT="$$report" \
 	k6 run \
 		-e BASE_URL="$(BASE_URL)" \
 		-e SESSION_TOKEN="$(SESSION_TOKEN_FOR_K6)" \
@@ -221,10 +204,16 @@ k6-auth-dashboard:
 		-e RAMP_DOWN="$(RAMP_DOWN)" \
 		-e THINK_TIME_SECONDS="$(THINK_TIME_SECONDS)" \
 		-e DEBUG_AUTH="$(DEBUG_AUTH)" \
-		$(K6_SCENARIOS)/auth-game-open.js
+		$(K6_SCENARIOS)/auth-game-open.js; \
+	status=$$?; \
+	if [ "$(OPEN_REPORT)" = "true" ] && [ -f "$$report" ]; then \
+		echo "Opening report: $$report"; \
+		open "$$report" >/dev/null 2>&1 || true; \
+	fi; \
+	exit $$status
 
 k6-auth-report:
-	@[ -n "$(SESSION_TOKEN_FOR_K6)$(SESSION_TOKENS_FOR_K6)" ] || [ -f "$(TOKENS_FILE)" ] || (echo "Set SESSION_TOKEN, SESSION_TOKENS, MAKEFILE_SESSION_TOKEN, MAKEFILE_SESSION_TOKENS, or $(TOKENS_FILE) first"; exit 1)
+	@[ -n "$(SESSION_TOKEN_FOR_K6)$(SESSION_TOKENS_FOR_K6)" ] || [ -f "$(TOKENS_FILE)" ] || (echo "Run make start or make token first"; exit 1)
 	@mkdir -p $(K6_RESULTS)
 	@report="$(K6_RESULTS)/auth-game-open-ru-$(REPORT_TS).html"; \
 	RU_REPORT="$$report" k6 run \
@@ -247,19 +236,30 @@ k6-auth-report:
 	exit $$status
 
 k6-auth-status:
-	@[ -n "$(SESSION_TOKEN_FOR_K6)$(SESSION_TOKENS_FOR_K6)" ] || [ -f "$(TOKENS_FILE)" ] || (echo "Set SESSION_TOKEN, SESSION_TOKENS, MAKEFILE_SESSION_TOKEN, MAKEFILE_SESSION_TOKENS, or $(TOKENS_FILE) first"; exit 1)
-	@k6 run \
+	@[ -n "$(SESSION_TOKEN_FOR_K6)$(SESSION_TOKENS_FOR_K6)" ] || [ -f "$(TOKENS_FILE)" ] || (echo "Run make start or make token first"; exit 1)
+	@mkdir -p $(K6_RESULTS)
+	@report="$(K6_RESULTS)/auth-status-ru-$(REPORT_TS).html"; \
+	RU_REPORT="$$report" k6 run \
 		-e BASE_URL="$(BASE_URL)" \
 		-e SESSION_TOKEN="$(SESSION_TOKEN_FOR_K6)" \
 		-e SESSION_TOKENS="$(SESSION_TOKENS_FOR_K6)" \
 		-e TOKENS_FILE="$(TOKENS_FILE_ABS)" \
-		$(K6_SCENARIOS)/auth-status.js
+		$(K6_SCENARIOS)/auth-status.js; \
+	status=$$?; \
+	if [ "$(OPEN_REPORT)" = "true" ] && [ -f "$$report" ]; then \
+		echo "Opening report: $$report"; \
+		open "$$report" >/dev/null 2>&1 || true; \
+	fi; \
+	exit $$status
 
 flight-once: k6-flight-once
 
 k6-flight-once:
-	@[ -n "$(SESSION_TOKEN_FOR_K6)$(SESSION_TOKENS_FOR_K6)" ] || [ -f "$(TOKENS_FILE)" ] || (echo "Set SESSION_TOKEN, SESSION_TOKENS, MAKEFILE_SESSION_TOKEN, MAKEFILE_SESSION_TOKENS, or $(TOKENS_FILE) first"; exit 1)
-	@ENABLE_STATE_CHANGING=true \
+	@[ -n "$(SESSION_TOKEN_FOR_K6)$(SESSION_TOKENS_FOR_K6)" ] || [ -f "$(TOKENS_FILE)" ] || (echo "Run make start or make token first"; exit 1)
+	@mkdir -p $(K6_RESULTS)
+	@report="$(K6_RESULTS)/flight-critical-ru-$(REPORT_TS).html"; \
+	ENABLE_STATE_CHANGING=true \
+	RU_REPORT="$$report" \
 	k6 run \
 		-e BASE_URL="$(BASE_URL)" \
 		-e SESSION_TOKEN="$(SESSION_TOKEN_FOR_K6)" \
@@ -268,7 +268,13 @@ k6-flight-once:
 		-e FLIGHT_VUS="$(FLIGHT_VUS)" \
 		-e FLIGHT_ITERATIONS="$(FLIGHT_ITERATIONS)" \
 		-e ROUTE_ID="$(ROUTE_ID)" \
-		$(K6_SCENARIOS)/flight-critical.js
+		$(K6_SCENARIOS)/flight-critical.js; \
+	status=$$?; \
+	if [ "$(OPEN_REPORT)" = "true" ] && [ -f "$$report" ]; then \
+		echo "Opening report: $$report"; \
+		open "$$report" >/dev/null 2>&1 || true; \
+	fi; \
+	exit $$status
 
 browser: k6-browser-flight-smoke
 
@@ -305,34 +311,54 @@ k6-grafana:
 	load-testing/k6/scripts/run-grafana.sh
 
 k6-browser-flight-smoke:
-	@test -n "$(SESSION_TOKEN_FOR_K6)" || (echo "Set SESSION_TOKEN or MAKEFILE_SESSION_TOKEN first"; exit 1)
+	@[ -n "$(SESSION_TOKEN_FOR_K6)$(SESSION_TOKENS_FOR_K6)" ] || [ -f "$(TOKENS_FILE)" ] || (echo "Run make start or make token first"; exit 1)
 	@mkdir -p $(K6_RESULTS)/screenshots
-	@K6_BROWSER_HEADLESS="$(K6_BROWSER_HEADLESS)" \
+	@report="$(K6_RESULTS)/browser-simple-flight-ru-$(REPORT_TS).html"; \
+	K6_BROWSER_HEADLESS="$(K6_BROWSER_HEADLESS)" \
+	RU_REPORT="$$report" \
 	k6 run \
 		-e FRONTEND_URL="$(FRONTEND_URL)" \
 		-e API_COOKIE_DOMAIN="$(API_COOKIE_DOMAIN)" \
 		-e SESSION_TOKEN="$(SESSION_TOKEN_FOR_K6)" \
+		-e SESSION_TOKENS="$(SESSION_TOKENS_FOR_K6)" \
+		-e TOKENS_FILE="$(TOKENS_FILE_ABS)" \
 		-e BROWSER_VUS="$(BROWSER_VUS)" \
 		-e BROWSER_ITERATIONS="$(BROWSER_ITERATIONS)" \
 		-e FLIGHT_OBSERVE_SECONDS="$(FLIGHT_OBSERVE_SECONDS)" \
 		-e SCREENSHOT_DIR="$(K6_RESULTS)/screenshots" \
-		$(K6_SCENARIOS)/browser-simple-flight.js
+		$(K6_SCENARIOS)/browser-simple-flight.js; \
+	status=$$?; \
+	if [ "$(OPEN_REPORT)" = "true" ] && [ -f "$$report" ]; then \
+		echo "Opening report: $$report"; \
+		open "$$report" >/dev/null 2>&1 || true; \
+	fi; \
+	exit $$status
 
 k6-browser-flight-dashboard:
-	@test -n "$(SESSION_TOKEN_FOR_K6)" || (echo "Set SESSION_TOKEN or MAKEFILE_SESSION_TOKEN first"; exit 1)
+	@[ -n "$(SESSION_TOKEN_FOR_K6)$(SESSION_TOKENS_FOR_K6)" ] || [ -f "$(TOKENS_FILE)" ] || (echo "Run make start or make token first"; exit 1)
 	@mkdir -p $(K6_RESULTS)/screenshots
-	@K6_WEB_DASHBOARD=true \
+	@report="$(K6_RESULTS)/browser-simple-flight-dashboard-ru-$(REPORT_TS).html"; \
+	K6_WEB_DASHBOARD=true \
 	K6_WEB_DASHBOARD_OPEN=true \
 	K6_BROWSER_HEADLESS="$(K6_BROWSER_HEADLESS)" \
+	RU_REPORT="$$report" \
 	k6 run \
 		-e FRONTEND_URL="$(FRONTEND_URL)" \
 		-e API_COOKIE_DOMAIN="$(API_COOKIE_DOMAIN)" \
 		-e SESSION_TOKEN="$(SESSION_TOKEN_FOR_K6)" \
+		-e SESSION_TOKENS="$(SESSION_TOKENS_FOR_K6)" \
+		-e TOKENS_FILE="$(TOKENS_FILE_ABS)" \
 		-e BROWSER_VUS="$(BROWSER_VUS)" \
 		-e BROWSER_ITERATIONS="$(BROWSER_ITERATIONS)" \
 		-e FLIGHT_OBSERVE_SECONDS="$(FLIGHT_OBSERVE_SECONDS)" \
 		-e SCREENSHOT_DIR="$(K6_RESULTS)/screenshots" \
-		$(K6_SCENARIOS)/browser-simple-flight.js
+		$(K6_SCENARIOS)/browser-simple-flight.js; \
+	status=$$?; \
+	if [ "$(OPEN_REPORT)" = "true" ] && [ -f "$$report" ]; then \
+		echo "Opening report: $$report"; \
+		open "$$report" >/dev/null 2>&1 || true; \
+	fi; \
+	exit $$status
 
 dist: k6-distributed
 

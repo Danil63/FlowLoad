@@ -11,6 +11,7 @@ GRAFANA_PUSH_TOKEN="${GRAFANA_PUSH_TOKEN:-}"
 TEST_ID="${TEST_ID:-$(date +%Y%m%d-%H%M%S)-${MODE}}"
 BASE_URL="${BASE_URL:-https://entreporgneur-big-journey-7b03.twc1.net}"
 TOKENS_FILE="${TOKENS_FILE:-$ROOT_DIR/load-testing/k6/tokens.txt}"
+REPORT_PATH="${REPORT_PATH:-$RESULTS_DIR/${MODE}-grafana-$TEST_ID.html}"
 VUS="${VUS:-50}"
 AUTH_VUS="${AUTH_VUS:-1}"
 USERS="${USERS:-}"
@@ -72,7 +73,7 @@ push_loki_log "info" "k6 run started"
 case "$MODE" in
   public)
     PUBLIC_VUS="${USERS:-$VUS}"
-    run_k6 "$SCENARIOS_DIR/public-readonly.js" \
+    RU_REPORT="$REPORT_PATH" run_k6 "$SCENARIOS_DIR/public-readonly.js" \
       -e BASE_URL="$BASE_URL" \
       -e VUS="$PUBLIC_VUS" \
       -e RAMP_UP="$RAMP_UP" \
@@ -83,7 +84,7 @@ case "$MODE" in
     ;;
   auth)
     AUTH_USERS="${USERS:-$AUTH_VUS}"
-    run_k6 "$SCENARIOS_DIR/auth-game-open.js" \
+    RU_REPORT="$REPORT_PATH" run_k6 "$SCENARIOS_DIR/auth-game-open.js" \
       -e BASE_URL="$BASE_URL" \
       -e SESSION_TOKEN="${SESSION_TOKEN:-}" \
       -e SESSION_TOKENS="${SESSION_TOKENS:-}" \
@@ -109,4 +110,8 @@ else
 fi
 
 echo "Grafana testid: $TEST_ID"
+if [ "${OPEN_REPORT:-true}" = "true" ] && [ -f "$REPORT_PATH" ]; then
+  echo "Opening report: $REPORT_PATH"
+  open "$REPORT_PATH" >/dev/null 2>&1 || true
+fi
 exit "$status"

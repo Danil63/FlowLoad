@@ -42,15 +42,6 @@ Then the second command can already be a test:
 make auth-1
 ```
 
-If you consciously accept storing tokens in Makefile, paste them near the top of `Makefile`:
-
-```make
-MAKEFILE_SESSION_TOKEN := paste_one_token_here
-MAKEFILE_SESSION_TOKENS := token1,token2,token3
-```
-
-Use `MAKEFILE_SESSION_TOKEN` for one account or `MAKEFILE_SESSION_TOKENS` for many accounts separated by commas.
-
 Check installation:
 
 ```bash
@@ -126,6 +117,19 @@ Russian HTML reports open automatically after the test finishes. To keep the bro
 OPEN_REPORT=false make auth-1
 ```
 
+This is the default for the short load-test commands too:
+
+```bash
+make public 200
+make auth 200
+make auth-status
+make flight-once
+make browser
+```
+
+If k6 returns `Error 99` because thresholds failed, the report is still created
+and opened before Make exits with the error.
+
 Mobile browser simple flight:
 
 ```bash
@@ -167,7 +171,6 @@ The first browser flight scenario is intentionally simple. It does not try to av
 If the default tap does not start the route, inspect the mobile page and pass selectors:
 
 ```bash
-SESSION_TOKEN='paste_cookie_value_here' \
 ROUTE_SELECTOR='button[data-testid="route-kazan-moscow"]' \
 START_SELECTOR='button[data-testid="start-flight"]' \
 make k6-browser-flight-smoke

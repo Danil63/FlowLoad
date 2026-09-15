@@ -2,11 +2,12 @@ import { browser } from 'k6/browser';
 import { check } from 'k6';
 import { Rate, Trend } from 'k6/metrics';
 import exec from 'k6/execution';
+import { createRussianSummary } from '../lib/russian-report.js';
+import { TOKENS } from '../lib/tokens.js';
 
 const FRONTEND_URL = __ENV.FRONTEND_URL || 'https://entreprorgneur-big-journey-2ebf.twc1.net';
 const API_COOKIE_DOMAIN = __ENV.API_COOKIE_DOMAIN || 'entreporgneur-big-journey-7b03.twc1.net';
 const SESSION_COOKIE_NAME = __ENV.SESSION_COOKIE_NAME || '__Secure-better-auth.session_token';
-const SESSION_TOKEN = __ENV.SESSION_TOKEN || '';
 
 const BROWSER_VUS = Number(__ENV.BROWSER_VUS || 1);
 const BROWSER_ITERATIONS = Number(__ENV.BROWSER_ITERATIONS || 1);
@@ -54,8 +55,8 @@ export const options = {
 };
 
 export function setup() {
-  if (!SESSION_TOKEN) {
-    exec.test.abort('Set SESSION_TOKEN before running browser tests.');
+  if (TOKENS.length === 0) {
+    exec.test.abort('Run make start or make token before running browser tests.');
   }
 }
 
@@ -68,6 +69,7 @@ function frontendCookieDomain() {
 }
 
 function sessionCookies() {
+  const sessionToken = TOKENS[0];
   const domains = [API_COOKIE_DOMAIN, frontendCookieDomain()]
     .map((domain) => domain.trim())
     .filter(Boolean)
@@ -75,7 +77,7 @@ function sessionCookies() {
 
   return domains.map((domain) => ({
     name: SESSION_COOKIE_NAME,
-    value: SESSION_TOKEN,
+    value: sessionToken,
     domain,
     path: '/',
     secure: true,
@@ -193,4 +195,10 @@ export default async function () {
     await page.close();
     await context.close();
   }
+}
+
+export function handleSummary(data) {
+  return createRussianSummary(data, {
+    title: 'Браузерный smoke-тест мобильной игры',
+  });
 }

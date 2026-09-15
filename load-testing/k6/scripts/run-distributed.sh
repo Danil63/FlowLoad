@@ -95,6 +95,8 @@ echo "Total VUs: $TOTAL_VUS"
 echo "Local VUs: $LOCAL_VUS"
 echo "Report: $REPORT_PATH"
 
+set +e
+
 case "$MODE" in
   public)
     RU_REPORT="$REPORT_PATH" k6 run \
@@ -105,6 +107,7 @@ case "$MODE" in
       -e RAMP_DOWN="$RAMP_DOWN" \
       -e THINK_TIME_SECONDS="$THINK_TIME_SECONDS" \
       "$SCENARIOS_DIR/public-readonly.js"
+    status=$?
     ;;
   auth)
     if [ -z "${SESSION_TOKEN:-}${SESSION_TOKENS:-}${TOKENS_FILE:-}" ]; then
@@ -123,6 +126,7 @@ case "$MODE" in
       -e RAMP_DOWN="$RAMP_DOWN" \
       -e THINK_TIME_SECONDS="$THINK_TIME_SECONDS" \
       "$SCENARIOS_DIR/auth-game-open.js"
+    status=$?
     ;;
   flight)
     if [ -z "${SESSION_TOKEN:-}${SESSION_TOKENS:-}${TOKENS_FILE:-}" ]; then
@@ -142,9 +146,19 @@ case "$MODE" in
       -e FLIGHT_HAPPINESS="${FLIGHT_HAPPINESS:-90}" \
       -e FLIGHT_COLLECTED_COINS="${FLIGHT_COLLECTED_COINS:-0}" \
       "$SCENARIOS_DIR/flight-critical.js"
+    status=$?
     ;;
   *)
     echo "Unknown MODE=$MODE. Use public, auth, or flight." >&2
-    exit 1
+    status=1
     ;;
 esac
+
+set -e
+
+if [ "${OPEN_REPORT:-true}" = "true" ] && [ -f "$REPORT_PATH" ]; then
+  echo "Opening report: $REPORT_PATH"
+  open "$REPORT_PATH" >/dev/null 2>&1 || true
+fi
+
+exit "$status"

@@ -5,6 +5,7 @@ load-testing/k6/.env
 load-testing/k6/.env.local
 load-testing/k6/tokens.txt
 load-testing/k6/tokens-*.txt
+session-date/
 
 # Generated reports
 load-testing/k6/results/
