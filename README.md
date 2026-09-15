@@ -24,7 +24,7 @@ The same local UI also has a Swagger/OpenAPI route builder:
 
 1. Upload a `.json`, `.yaml`, or `.yml` Swagger/OpenAPI file.
 2. Search the method list at the bottom of the board.
-3. Select two methods and connect them into a route.
+3. Drag methods into the route canvas or select two methods and connect them.
 4. Reorder or remove steps if needed.
 5. Save the route locally.
 

@@ -24,9 +24,9 @@ The token is saved locally to `load-testing/k6/tokens.txt`, which is ignored by 
 Do not store the token in repository files.
 
 The local web UI includes a Swagger/OpenAPI route builder. A teammate can upload
-a Swagger file, search methods, select two methods, connect them in sequence, and
-save a local route. Saved route files are created under `load-testing/routes/local/`
-and are ignored by git.
+a Swagger file, search methods, drag methods into the route canvas, reorder steps,
+or select two methods and connect them in sequence. Saved route files are created
+under `load-testing/routes/local/` and are ignored by git.
 
 If token setup was skipped:
 
@@ -59,6 +59,8 @@ scenarios.
 | --- | --- | --- |
 | Upload Swagger/OpenAPI | Reads `.json`, `.yaml`, or `.yml` file and extracts `paths` | Method shelf is filled with API methods |
 | Search methods | Filters by method, path, summary, operation id, tag, or risk | Needed endpoint is easy to find |
+| Drag method to route | Adds one API method to the route canvas | Route canvas shows a numbered step |
+| Select one method | Marks one card in the method shelf | `Add selected` becomes active |
 | Select two methods | Marks two cards in the method shelf | `Connect selected` becomes active |
 | Connect selected | Adds the selected methods to the route in order | Route canvas shows numbered steps and arrows |
 | Reorder or remove | Adjusts step order before saving | Final sequence matches the business route |

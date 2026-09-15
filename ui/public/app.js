@@ -17,7 +17,9 @@ const methodSearchInput = document.querySelector('#methodSearchInput');
 const routeNameInput = document.querySelector('#routeNameInput');
 const methodList = document.querySelector('#methodList');
 const methodCount = document.querySelector('#methodCount');
+const routeCanvas = document.querySelector('.routeCanvas');
 const routeSteps = document.querySelector('#routeSteps');
+const addSelectedButton = document.querySelector('#addSelectedButton');
 const connectButton = document.querySelector('#connectButton');
 const clearRouteButton = document.querySelector('#clearRouteButton');
 const saveRouteButton = document.querySelector('#saveRouteButton');
@@ -122,6 +124,7 @@ function filteredEndpoints() {
 }
 
 function updateRouteControls() {
+  addSelectedButton.disabled = selectedEndpointIds.length !== 1;
   connectButton.disabled = selectedEndpointIds.length !== 2;
   saveRouteButton.disabled = route.length === 0;
 }
@@ -148,7 +151,7 @@ function renderMethods() {
       const summary = endpoint.summary ? `<p>${escapeHtml(endpoint.summary)}</p>` : '';
       const auth = endpoint.authRequired ? '<span class="metaPill">auth</span>' : '<span class="metaPill">public</span>';
 
-      return `<button class="methodCard${selected}" type="button" data-endpoint-id="${escapeHtml(endpoint.id)}">
+      return `<button class="methodCard${selected}" type="button" draggable="true" data-endpoint-id="${escapeHtml(endpoint.id)}">
         <span class="methodCardTop">
           <span class="${methodClass(endpoint.method)}">${escapeHtml(endpoint.method)}</span>
           <span class="risk risk-${escapeHtml(endpoint.risk)}">${escapeHtml(riskLabel(endpoint.risk))}</span>
@@ -166,7 +169,7 @@ function renderMethods() {
 function renderRoute() {
   if (!route.length) {
     routeSteps.className = 'routeSteps empty';
-    routeSteps.textContent = 'Методы появятся здесь после добавления в маршрут.';
+    routeSteps.textContent = 'Перетащи метод из нижней полки сюда или добавь выбранный метод кнопкой.';
     updateRouteControls();
     return;
   }
@@ -178,7 +181,7 @@ function renderRoute() {
       const moveUpDisabled = index === 0 ? ' disabled' : '';
       const moveDownDisabled = index === route.length - 1 ? ' disabled' : '';
 
-      return `<div class="routeStep">
+      return `<div class="routeStep" draggable="true" data-step-index="${index}">
         <div class="routeStepIndex">${index + 1}</div>
         <div class="routeStepBody">
           <span class="${methodClass(step.method)}">${escapeHtml(step.method)}</span>
@@ -286,9 +289,9 @@ function toggleEndpointSelection(endpointId) {
   renderMethods();
 }
 
-function addEndpointToRoute(endpoint) {
+function endpointToRouteStep(endpoint) {
   if (!endpoint) return;
-  route.push({
+  return {
     method: endpoint.method,
     path: endpoint.path,
     summary: endpoint.summary,
@@ -297,7 +300,13 @@ function addEndpointToRoute(endpoint) {
     authRequired: endpoint.authRequired,
     risk: endpoint.risk,
     expectStatus: 200,
-  });
+  };
+}
+
+function addEndpointToRoute(endpoint, index = route.length) {
+  const step = endpointToRouteStep(endpoint);
+  if (!step) return;
+  route.splice(index, 0, step);
   saveWorkspace();
 }
 
@@ -307,6 +316,34 @@ function moveRouteStep(fromIndex, toIndex) {
   route.splice(toIndex, 0, step);
   saveWorkspace();
   renderRoute();
+}
+
+function moveRouteStepTo(fromIndex, toIndex) {
+  if (fromIndex < 0 || fromIndex >= route.length) return;
+
+  const [step] = route.splice(fromIndex, 1);
+  const adjustedIndex = toIndex > fromIndex ? toIndex - 1 : toIndex;
+  const safeIndex = Math.max(0, Math.min(adjustedIndex, route.length));
+
+  route.splice(safeIndex, 0, step);
+  saveWorkspace();
+  renderRoute();
+}
+
+function dropIndexFromEvent(event) {
+  const step = event.target.closest('.routeStep');
+  if (!step) return route.length;
+
+  const index = Number(step.dataset.stepIndex);
+  const rect = step.getBoundingClientRect();
+  return event.clientX > rect.left + rect.width / 2 ? index + 1 : index;
+}
+
+function clearDragState() {
+  routeCanvas.classList.remove('dragOver');
+  document.querySelectorAll('.dragging').forEach((element) => {
+    element.classList.remove('dragging');
+  });
 }
 
 function startPolling() {
@@ -408,12 +445,74 @@ methodList.addEventListener('click', (event) => {
   toggleEndpointSelection(card.dataset.endpointId);
 });
 
-connectButton.addEventListener('click', () => {
-  selectedEndpointIds.map(selectedEndpoint).forEach(addEndpointToRoute);
+methodList.addEventListener('dragstart', (event) => {
+  const card = event.target.closest('[data-endpoint-id]');
+  if (!card) return;
+
+  event.dataTransfer.effectAllowed = 'copy';
+  event.dataTransfer.setData('application/x-endpoint-id', card.dataset.endpointId);
+  card.classList.add('dragging');
+});
+
+methodList.addEventListener('dragend', clearDragState);
+
+addSelectedButton.addEventListener('click', () => {
+  addEndpointToRoute(selectedEndpoint(selectedEndpointIds[0]));
   selectedEndpointIds = [];
   renderMethods();
   renderRoute();
 });
+
+connectButton.addEventListener('click', () => {
+  selectedEndpointIds.map(selectedEndpoint).forEach((endpoint) => addEndpointToRoute(endpoint));
+  selectedEndpointIds = [];
+  renderMethods();
+  renderRoute();
+});
+
+routeCanvas.addEventListener('dragover', (event) => {
+  const types = Array.from(event.dataTransfer.types);
+  if (!types.includes('application/x-endpoint-id') && !types.includes('application/x-route-step-index')) {
+    return;
+  }
+
+  event.preventDefault();
+  routeCanvas.classList.add('dragOver');
+  event.dataTransfer.dropEffect = types.includes('application/x-endpoint-id') ? 'copy' : 'move';
+});
+
+routeCanvas.addEventListener('dragleave', (event) => {
+  if (!routeCanvas.contains(event.relatedTarget)) {
+    routeCanvas.classList.remove('dragOver');
+  }
+});
+
+routeCanvas.addEventListener('drop', (event) => {
+  event.preventDefault();
+  const endpointId = event.dataTransfer.getData('application/x-endpoint-id');
+  const routeStepIndex = event.dataTransfer.getData('application/x-route-step-index');
+  const targetIndex = dropIndexFromEvent(event);
+
+  if (endpointId) {
+    addEndpointToRoute(selectedEndpoint(endpointId), targetIndex);
+    renderRoute();
+  } else if (routeStepIndex !== '') {
+    moveRouteStepTo(Number(routeStepIndex), targetIndex);
+  }
+
+  clearDragState();
+});
+
+routeSteps.addEventListener('dragstart', (event) => {
+  const step = event.target.closest('.routeStep');
+  if (!step || event.target.closest('button')) return;
+
+  event.dataTransfer.effectAllowed = 'move';
+  event.dataTransfer.setData('application/x-route-step-index', step.dataset.stepIndex);
+  step.classList.add('dragging');
+});
+
+routeSteps.addEventListener('dragend', clearDragState);
 
 routeSteps.addEventListener('click', (event) => {
   const button = event.target.closest('[data-action]');
