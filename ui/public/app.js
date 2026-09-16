@@ -50,6 +50,14 @@ let savedLoadProfiles = [];
 
 const workspaceStorageKey = 'bigJourneyK6RouteBuilder';
 const loadProfileStorageKey = 'bigJourneyK6LoadProfileBuilder';
+const defaultMethodVus = 10;
+const loadScaleMin = 10;
+const loadScaleMax = 1000;
+const loadOverflowSliderValue = 1100;
+const loadGraphHeight = 220;
+const loadGraphTopPad = 18;
+const loadGraphBottomPad = 22;
+const loadColumnWidth = 154;
 
 async function requestJson(url, options = {}) {
   const response = await fetch(url, {
@@ -303,7 +311,7 @@ function renderLoadProfileOptions() {
   }
 }
 
-function endpointToLoadTarget(endpoint, vus = 10) {
+function endpointToLoadTarget(endpoint, vus = defaultMethodVus) {
   if (!endpoint) return null;
   return {
     method: endpoint.method,
@@ -316,6 +324,38 @@ function endpointToLoadTarget(endpoint, vus = 10) {
     expectStatus: 200,
     weight: vus,
   };
+}
+
+function targetKey(target) {
+  return `${String(target.method || '').toUpperCase()} ${target.path}`;
+}
+
+function selectAllLoadTargets(vus = defaultMethodVus) {
+  loadProfileTargets = endpoints.map((endpoint) => endpointToLoadTarget(endpoint, vus)).filter(Boolean);
+  saveLoadProfileWorkspace();
+}
+
+function syncAllLoadTargets() {
+  const existingTargets = new Map(loadProfileTargets.map((target) => [targetKey(target), target]));
+  loadProfileTargets = endpoints
+    .map((endpoint) => {
+      const nextTarget = endpointToLoadTarget(endpoint);
+      const existingTarget = existingTargets.get(targetKey(nextTarget));
+      return existingTarget
+        ? {
+            ...nextTarget,
+            weight: Math.max(loadScaleMin, Number(existingTarget.weight || defaultMethodVus)),
+          }
+        : nextTarget;
+    })
+    .filter(Boolean);
+  saveLoadProfileWorkspace();
+}
+
+function ensureDefaultLoadTargets() {
+  if (endpoints.length && loadProfileTargets.length === 0) {
+    selectAllLoadTargets();
+  }
 }
 
 function loadProfileTotal() {
@@ -359,46 +399,76 @@ function renderLoadMethods() {
 }
 
 function renderLoadTargets() {
+  ensureDefaultLoadTargets();
   const total = loadProfileTotal();
   saveLoadProfileButton.disabled = loadProfileTargets.length === 0;
 
   if (!loadProfileTargets.length) {
     loadTargetsList.className = 'loadTargetsList empty';
-    loadTargetsList.textContent = 'Перетащи методы сюда или нажми на метод в нижней полке.';
+    loadTargetsList.textContent = 'Загрузи Swagger, чтобы все методы появились в профиле нагрузки.';
     return;
   }
 
-  const maxWeight = Math.max(...loadProfileTargets.map((target) => Number(target.weight || 0)), 1);
   loadTargetsList.className = 'loadTargetsList';
-  loadTargetsList.style.setProperty('--load-count', String(loadProfileTargets.length));
-  loadTargetsList.innerHTML = loadProfileTargets
+  const graphWidth = Math.max(loadColumnWidth * loadProfileTargets.length, 1);
+  const gridLines = [1000, 750, 500, 250, 10];
+  const yForWeight = (weight) => {
+    const clampedWeight = Math.max(loadScaleMin, Math.min(loadScaleMax, Number(weight || loadScaleMin)));
+    const activeHeight = loadGraphHeight - loadGraphTopPad - loadGraphBottomPad;
+    const ratio = (clampedWeight - loadScaleMin) / (loadScaleMax - loadScaleMin);
+    return Math.round(loadGraphTopPad + (1 - ratio) * activeHeight);
+  };
+  const points = loadProfileTargets
     .map((target, index) => {
-      const weight = Number(target.weight || 0);
+      const x = Math.round(index * loadColumnWidth + loadColumnWidth / 2);
+      return `${x},${yForWeight(target.weight)}`;
+    })
+    .join(' ');
+  const axis = gridLines
+    .map((value) => `<span class="loadAxisTick" style="top:${yForWeight(value)}px">${value}</span>`)
+    .join('');
+  const grid = gridLines
+    .map((value) => `<line x1="0" y1="${yForWeight(value)}" x2="${graphWidth}" y2="${yForWeight(value)}"></line>`)
+    .join('');
+  const targetCards = loadProfileTargets
+    .map((target, index) => {
+      const weight = Number(target.weight || defaultMethodVus);
       const percent = total > 0 ? Math.round((weight / total) * 100) : 0;
-      const height = Math.max(18, Math.round((weight / maxWeight) * 128));
-      const summary = target.summary ? `<p>${escapeHtml(target.summary)}</p>` : '';
+      const sliderValue = weight > loadScaleMax ? loadOverflowSliderValue : Math.max(loadScaleMin, weight);
+      const customClass = weight > loadScaleMax ? '' : ' hidden';
 
-      return `<div class="loadTarget" data-load-target-index="${index}" style="--point-height: ${height}px">
+      return `<div class="loadTarget" data-load-target-index="${index}" style="--point-top: ${yForWeight(weight)}px">
         <div class="loadPoint">
+          <span class="loadPointValue">${weight}</span>
           <span class="loadPointDot" title="${weight} VUs"></span>
-          <span class="loadPointLine"></span>
+          <input class="loadRange" type="range" min="${loadScaleMin}" max="${loadOverflowSliderValue}" step="10" value="${sliderValue}" data-load-range-index="${index}" aria-label="VUs для ${escapeHtml(target.method)} ${escapeHtml(target.path)}">
         </div>
         <div class="loadTargetCard">
           <div class="loadTargetTop">
             <span class="${methodClass(target.method)}">${escapeHtml(target.method)}</span>
-            <button class="iconButton dangerButton" type="button" data-load-action="remove" data-index="${index}" title="Удалить">×</button>
+            <span class="loadPercent">${percent}%</span>
           </div>
           <strong>${escapeHtml(target.path)}</strong>
-          ${summary}
-          <label>
-            VUs на метод
-            <input class="loadWeightInput" type="number" min="1" max="10000" value="${weight}" data-load-weight-index="${index}">
+          <span class="loadOperation">${escapeHtml(target.operationId || target.summary || target.tags[0] || 'api')}</span>
+          <label class="customVus${customClass}">
+            свой VUs
+            <input class="loadWeightInput" type="number" min="1001" max="100000" value="${Math.max(weight, 1001)}" data-load-weight-index="${index}">
           </label>
-          <span class="loadPercent">${percent}% от профиля</span>
         </div>
       </div>`;
     })
     .join('');
+
+  loadTargetsList.innerHTML = `<div class="loadAxis">${axis}</div>
+    <div class="loadGraphScroller">
+      <div class="loadGraphInner" style="width:${graphWidth}px; --load-count:${loadProfileTargets.length}; --load-column-width:${loadColumnWidth}px">
+        <svg class="loadTrend" viewBox="0 0 ${graphWidth} ${loadGraphHeight}" preserveAspectRatio="none" aria-hidden="true">
+          <g class="loadGrid">${grid}</g>
+          <polyline points="${points}"></polyline>
+        </svg>
+        ${targetCards}
+      </div>
+    </div>`;
 }
 
 function renderSavedLoadProfiles(profiles = []) {
@@ -637,7 +707,7 @@ function addEndpointToLoadProfile(endpoint) {
   );
 
   if (existingTarget) {
-    existingTarget.weight = Number(existingTarget.weight || 0) + 10;
+    existingTarget.weight = Math.max(defaultMethodVus, Number(existingTarget.weight || defaultMethodVus));
   } else {
     loadProfileTargets.push(target);
   }
@@ -806,6 +876,8 @@ swaggerInput.addEventListener('change', async () => {
     endpoints = data.endpoints;
     selectedEndpointIds = [];
     route = [];
+    loadProfileTargets = [];
+    syncAllLoadTargets();
     swaggerState.textContent = `${data.title || file.name}: найдено ${endpoints.length} методов.`;
     saveWorkspace();
     renderMethods();
@@ -970,12 +1042,29 @@ routeSteps.addEventListener('click', (event) => {
   }
 });
 
+loadTargetsList.addEventListener('input', (event) => {
+  const range = event.target.closest('[data-load-range-index]');
+  if (!range) return;
+
+  const index = Number(range.dataset.loadRangeIndex);
+  const value = Number(range.value || defaultMethodVus);
+
+  if (value > loadScaleMax) {
+    loadProfileTargets[index].weight = Math.max(loadOverflowSliderValue, Number(loadProfileTargets[index].weight || loadOverflowSliderValue));
+  } else {
+    loadProfileTargets[index].weight = Math.max(loadScaleMin, value);
+  }
+
+  saveLoadProfileWorkspace();
+  renderLoadTargets();
+});
+
 loadTargetsList.addEventListener('change', (event) => {
   const input = event.target.closest('[data-load-weight-index]');
   if (!input) return;
 
   const index = Number(input.dataset.loadWeightIndex);
-  const value = Math.max(1, Math.min(10000, Number(input.value || 1)));
+  const value = Math.max(loadScaleMax + 1, Math.min(100000, Number(input.value || loadScaleMax + 1)));
   loadProfileTargets[index].weight = value;
   saveLoadProfileWorkspace();
   renderLoadTargets();
@@ -1005,7 +1094,7 @@ routeNameInput.addEventListener('input', saveWorkspace);
 loadProfileNameInput.addEventListener('input', saveLoadProfileWorkspace);
 
 clearLoadProfileButton.addEventListener('click', () => {
-  loadProfileTargets = [];
+  selectAllLoadTargets();
   saveLoadProfileWorkspace();
   renderLoadTargets();
 });
@@ -1045,6 +1134,9 @@ saveLoadProfileButton.addEventListener('click', async () => {
 commandSelect.dispatchEvent(new Event('change'));
 restoreWorkspace();
 restoreLoadProfileWorkspace();
+if (endpoints.length) {
+  syncAllLoadTargets();
+}
 renderMethods();
 renderRoute();
 renderLoadMethods();

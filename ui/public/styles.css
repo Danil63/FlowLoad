@@ -636,49 +636,33 @@ pre {
   overflow: hidden;
   border: 1px solid var(--line);
   border-radius: 8px;
-  background:
-    linear-gradient(180deg, rgba(29, 78, 216, 0.05) 0 1px, transparent 1px 64px),
-    #fbfcff;
-  background-size: 100% 64px;
+  background: #fbfcff;
   padding: 14px;
   transition: background 160ms ease, border-color 160ms ease, box-shadow 160ms ease;
 }
 
 .loadChart.dragOver {
   border-color: var(--accent);
-  background:
-    linear-gradient(180deg, rgba(29, 78, 216, 0.1) 0 1px, transparent 1px 64px),
-    var(--accent-soft);
+  background: var(--accent-soft);
   box-shadow: inset 0 0 0 1px var(--accent);
 }
 
 .loadTargetsList {
   position: relative;
   display: grid;
-  grid-template-columns: repeat(var(--load-count, 1), minmax(190px, 1fr));
-  gap: 12px;
+  grid-template-columns: 52px minmax(0, 1fr);
+  gap: 10px;
   max-width: 100%;
-  min-height: 310px;
+  min-height: 360px;
   margin-top: 16px;
-  overflow-x: auto;
-  overflow-y: hidden;
-  padding: 14px 2px 8px;
-}
-
-.loadTargetsList::before {
-  content: "";
-  position: absolute;
-  left: 18px;
-  right: 18px;
-  top: 70px;
-  height: 2px;
-  background: linear-gradient(90deg, transparent, rgba(29, 78, 216, 0.3), transparent);
-  pointer-events: none;
+  overflow: hidden;
+  padding: 0;
 }
 
 .loadTargetsList.empty {
   display: grid;
-  min-height: 220px;
+  grid-template-columns: 1fr;
+  min-height: 240px;
   place-items: center;
   border: 1px dashed var(--line);
   border-radius: 8px;
@@ -686,52 +670,143 @@ pre {
   text-align: center;
 }
 
-.loadTargetsList.empty::before {
-  display: none;
+.loadAxis {
+  position: relative;
+  height: 220px;
+  margin-top: 2px;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 800;
+  line-height: 1;
+}
+
+.loadAxisTick {
+  position: absolute;
+  right: 0;
+  transform: translateY(-50%);
+  white-space: nowrap;
+}
+
+.loadGraphScroller {
+  min-width: 0;
+  overflow-x: auto;
+  overflow-y: hidden;
+  padding-bottom: 8px;
+}
+
+.loadGraphInner {
+  position: relative;
+  display: grid;
+  grid-template-columns: repeat(var(--load-count), var(--load-column-width));
+  grid-template-rows: 220px 128px;
+  min-width: 100%;
+}
+
+.loadTrend {
+  position: absolute;
+  inset: 0 0 auto 0;
+  width: 100%;
+  height: 220px;
+  overflow: visible;
+  pointer-events: none;
+  z-index: 2;
+}
+
+.loadTrend .loadGrid line {
+  stroke: #e8edf5;
+  stroke-width: 1;
+}
+
+.loadTrend polyline {
+  fill: none;
+  stroke: #124cff;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 4;
+  vector-effect: non-scaling-stroke;
 }
 
 .loadTarget {
-  display: grid;
-  grid-template-rows: 150px auto;
+  position: relative;
+  display: contents;
   min-width: 0;
 }
 
 .loadPoint {
   position: relative;
-  display: flex;
-  align-items: flex-end;
-  justify-content: center;
-  min-height: 150px;
+  grid-row: 1;
+  height: 220px;
+  z-index: 3;
 }
 
-.loadPointLine {
+.loadPoint::after {
+  content: "";
+  position: absolute;
+  left: 50%;
+  top: var(--point-top);
+  bottom: 0;
   width: 2px;
-  height: var(--point-height);
   border-radius: 999px;
-  background: linear-gradient(180deg, var(--accent), rgba(29, 78, 216, 0.12));
+  background: rgba(29, 78, 216, 0.18);
+  transform: translateX(-50%);
+  pointer-events: none;
 }
 
 .loadPointDot {
   position: absolute;
-  bottom: calc(var(--point-height) - 7px);
-  width: 16px;
-  height: 16px;
+  left: 50%;
+  top: var(--point-top);
+  width: 14px;
+  height: 14px;
   border: 3px solid #ffffff;
   border-radius: 50%;
   background: var(--accent);
   box-shadow: 0 0 0 2px rgba(29, 78, 216, 0.25), 0 10px 20px rgba(29, 78, 216, 0.22);
-  z-index: 1;
+  transform: translate(-50%, -50%);
+  z-index: 4;
+}
+
+.loadPointValue {
+  position: absolute;
+  left: 50%;
+  top: calc(var(--point-top) - 24px);
+  color: var(--accent);
+  font-size: 11px;
+  font-weight: 900;
+  transform: translateX(-50%);
+  white-space: nowrap;
+  z-index: 4;
+}
+
+.loadRange {
+  position: absolute;
+  left: 50%;
+  top: 16px;
+  width: 190px;
+  height: 28px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  transform: translateX(-50%) rotate(-90deg);
+  transform-origin: center;
+  opacity: 0;
+  cursor: ns-resize;
+  z-index: 5;
 }
 
 .loadTargetCard {
   display: grid;
+  grid-row: 2;
   min-width: 0;
-  gap: 8px;
+  align-self: start;
+  gap: 5px;
+  min-height: 112px;
+  margin: 0 5px;
   border: 1px solid var(--line);
   border-radius: 8px;
   background: #ffffff;
-  padding: 12px;
-  box-shadow: 0 10px 24px rgba(20, 25, 34, 0.06);
+  padding: 9px;
+  box-shadow: 0 8px 18px rgba(20, 25, 34, 0.05);
 }
 
 .loadTargetTop {
@@ -742,27 +817,64 @@ pre {
 }
 
 .loadTargetCard strong {
+  font-size: 12px;
+  line-height: 1.25;
   overflow-wrap: anywhere;
 }
 
-.loadTargetCard p {
+.loadOperation {
   color: var(--muted);
-  font-size: 12px;
+  overflow: hidden;
+  font-size: 11px;
+  line-height: 1.25;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .loadTargetCard label {
-  margin: 4px 0 0;
+  margin: 0;
+  font-size: 10px;
 }
 
 .loadWeightInput {
-  height: 36px;
-  margin-top: 6px;
+  height: 30px;
+  margin-top: 4px;
+  padding: 0 8px;
+  font-size: 12px;
 }
 
 .loadPercent {
   color: var(--muted);
-  font-size: 12px;
+  font-size: 11px;
   font-weight: 700;
+}
+
+.loadBuilder .methodList {
+  grid-auto-columns: minmax(150px, 190px);
+  min-height: 100px;
+}
+
+.loadBuilder .methodCard {
+  min-height: 96px;
+  gap: 6px;
+  padding: 9px;
+}
+
+.loadBuilder .methodCard p {
+  display: none;
+}
+
+.loadBuilder .methodCard strong {
+  font-size: 12px;
+  line-height: 1.25;
+}
+
+.loadBuilder .method,
+.loadBuilder .risk,
+.loadBuilder .metaPill {
+  min-height: 20px;
+  padding: 0 7px;
+  font-size: 10px;
 }
 
 @media (max-width: 760px) {
@@ -807,11 +919,18 @@ pre {
   }
 
   .methodList,
-  .routeSteps,
-  .loadTargetsList {
+  .routeSteps {
     grid-auto-columns: minmax(230px, 86vw);
     grid-template-columns: none;
     grid-auto-flow: column;
+  }
+
+  .loadTargetsList {
+    grid-template-columns: 46px minmax(0, 1fr);
+  }
+
+  .loadGraphInner {
+    grid-template-columns: repeat(var(--load-count), 138px);
   }
 
   .savedRoute span {
