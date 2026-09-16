@@ -199,6 +199,81 @@ button:disabled {
   background: var(--accent-hover);
 }
 
+.swaggerActions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: center;
+}
+
+.fileBrowser {
+  display: grid;
+  gap: 12px;
+  margin-top: 14px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fbfcff;
+  padding: 14px;
+}
+
+.fileBrowserHead,
+.fileBrowserActions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.fileBrowserHead p {
+  max-width: 680px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.fileBrowserActions {
+  justify-content: flex-start;
+}
+
+.fileBrowserList {
+  display: grid;
+  gap: 8px;
+  max-height: 340px;
+  overflow: auto;
+}
+
+.fileBrowserItem {
+  display: grid;
+  grid-template-columns: 70px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  height: auto;
+  min-height: 42px;
+  border: 1px solid var(--line);
+  background: #ffffff;
+  color: var(--text);
+  padding: 9px 10px;
+  text-align: left;
+}
+
+.fileBrowserItem:hover {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.fileBrowserItem span,
+.fileBrowserItem small {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.fileBrowserItem strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 #runButton {
   width: 100%;
   margin-top: 16px;

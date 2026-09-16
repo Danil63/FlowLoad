@@ -14,6 +14,8 @@ const resultsDir = path.join(k6Dir, 'results');
 const routesDir = path.join(rootDir, 'load-testing', 'routes', 'local');
 const loadProfilesDir = path.join(rootDir, 'load-testing', 'load-profiles', 'local');
 const port = Number(process.env.PORT || 8787);
+const homeDir = path.resolve(process.env.HOME || process.env.USERPROFILE || rootDir);
+const swaggerFileExtensions = new Set(['.json', '.yaml', '.yml']);
 
 const runs = new Map();
 let activeRunId = null;
@@ -49,6 +51,22 @@ function contentType(filePath) {
   if (filePath.endsWith('.css')) return 'text/css; charset=utf-8';
   if (filePath.endsWith('.js')) return 'text/javascript; charset=utf-8';
   return 'application/octet-stream';
+}
+
+function isSwaggerFileName(fileName) {
+  return swaggerFileExtensions.has(path.extname(fileName).toLowerCase());
+}
+
+async function resolveHomePath(inputPath = '') {
+  const requestedPath = inputPath ? path.resolve(homeDir, inputPath) : homeDir;
+  const realHome = await fs.realpath(homeDir);
+  const realPath = await fs.realpath(requestedPath);
+
+  if (realPath !== realHome && !realPath.startsWith(`${realHome}${path.sep}`)) {
+    throw new Error('Path must be inside the Mac user folder');
+  }
+
+  return realPath;
 }
 
 async function readBody(req) {
@@ -318,6 +336,72 @@ async function parseSwagger(req, res) {
   json(res, 200, {
     ok: true,
     name: String(body.name || document.info?.title || 'swagger').trim(),
+    title: document.info?.title || '',
+    version: document.info?.version || '',
+    endpoints,
+  });
+}
+
+async function listLocalFiles(req, res, url) {
+  const currentPath = await resolveHomePath(url.searchParams.get('dir') || '');
+  const realHome = await fs.realpath(homeDir);
+  const entries = await fs.readdir(currentPath, { withFileTypes: true });
+  const items = [];
+
+  for (const entry of entries) {
+    if (entry.name.startsWith('.')) continue;
+
+    const fullPath = path.join(currentPath, entry.name);
+    if (entry.isDirectory()) {
+      items.push({
+        type: 'directory',
+        name: entry.name,
+        path: fullPath,
+      });
+      continue;
+    }
+
+    if (entry.isFile() && isSwaggerFileName(entry.name)) {
+      const stat = await fs.stat(fullPath);
+      items.push({
+        type: 'file',
+        name: entry.name,
+        path: fullPath,
+        size: stat.size,
+      });
+    }
+  }
+
+  items.sort((a, b) => {
+    if (a.type !== b.type) return a.type === 'directory' ? -1 : 1;
+    return a.name.localeCompare(b.name, 'ru');
+  });
+
+  json(res, 200, {
+    homePath: realHome,
+    currentPath,
+    parentPath: currentPath === realHome ? null : path.dirname(currentPath),
+    items,
+  });
+}
+
+async function parseLocalSwagger(req, res) {
+  const body = await readBody(req);
+  const filePath = await resolveHomePath(String(body.path || ''));
+
+  if (!isSwaggerFileName(filePath)) {
+    json(res, 400, { error: 'Choose a .json, .yaml, or .yml Swagger/OpenAPI file' });
+    return;
+  }
+
+  const content = await fs.readFile(filePath, 'utf8');
+  const document = parseDocument(content);
+  const endpoints = extractEndpoints(document);
+
+  json(res, 200, {
+    ok: true,
+    name: path.basename(filePath),
+    path: filePath,
     title: document.info?.title || '',
     version: document.info?.version || '',
     endpoints,
@@ -637,6 +721,16 @@ const server = createServer(async (req, res) => {
 
     if (req.method === 'POST' && url.pathname === '/api/swagger') {
       await parseSwagger(req, res);
+      return;
+    }
+
+    if (req.method === 'GET' && url.pathname === '/api/local-files') {
+      await listLocalFiles(req, res, url);
+      return;
+    }
+
+    if (req.method === 'POST' && url.pathname === '/api/swagger/local') {
+      await parseLocalSwagger(req, res);
       return;
     }
 

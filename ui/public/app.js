@@ -17,6 +17,13 @@ const refreshButton = document.querySelector('#refreshButton');
 const reportsButton = document.querySelector('#reportsButton');
 const swaggerInput = document.querySelector('#swaggerInput');
 const swaggerState = document.querySelector('#swaggerState');
+const openMacSwaggerButton = document.querySelector('#openMacSwaggerButton');
+const macFileBrowser = document.querySelector('#macFileBrowser');
+const macFileBrowserPath = document.querySelector('#macFileBrowserPath');
+const macFileBrowserList = document.querySelector('#macFileBrowserList');
+const macFileBrowserHomeButton = document.querySelector('#macFileBrowserHomeButton');
+const macFileBrowserUpButton = document.querySelector('#macFileBrowserUpButton');
+const closeMacFileBrowserButton = document.querySelector('#closeMacFileBrowserButton');
 const methodSearchInput = document.querySelector('#methodSearchInput');
 const routeNameInput = document.querySelector('#routeNameInput');
 const methodList = document.querySelector('#methodList');
@@ -46,6 +53,9 @@ let savedRoutes = [];
 let loadProfileTargets = [];
 let savedLoadProfiles = [];
 let expandedLoadTargetKey = null;
+let macFileBrowserCurrentPath = '';
+let macFileBrowserHomePath = '';
+let macFileBrowserParentPath = '';
 
 const workspaceStorageKey = 'bigJourneyK6RouteBuilder';
 const loadProfileStorageKey = 'bigJourneyK6LoadProfileBuilder';
@@ -680,6 +690,99 @@ async function deleteSavedLoadProfile(fileName) {
   loadProfileState.textContent = `Профиль "${name}" удален.`;
 }
 
+function applySwaggerData(data, sourceName) {
+  endpoints = data.endpoints;
+  selectedEndpointIds = [];
+  route = [];
+  loadProfileTargets = [];
+  syncAllLoadTargets();
+  swaggerState.textContent = `${data.title || sourceName}: найдено ${endpoints.length} методов.`;
+  saveWorkspace();
+  renderMethods();
+  renderRoute();
+  renderLoadMethods();
+}
+
+function clearSwaggerData(errorMessage) {
+  endpoints = [];
+  selectedEndpointIds = [];
+  route = [];
+  loadProfileTargets = [];
+  localStorage.removeItem(workspaceStorageKey);
+  localStorage.removeItem(loadProfileStorageKey);
+  swaggerState.textContent = errorMessage;
+  renderMethods();
+  renderRoute();
+  renderLoadMethods();
+}
+
+function formatFileSize(size) {
+  if (!Number.isFinite(size)) return '';
+  if (size < 1024) return `${size} B`;
+  if (size < 1024 * 1024) return `${Math.round(size / 1024)} KB`;
+  return `${(size / 1024 / 1024).toFixed(1)} MB`;
+}
+
+function displayHomePath(filePath) {
+  if (!filePath) return '~';
+  return macFileBrowserHomePath && filePath.startsWith(macFileBrowserHomePath)
+    ? `~${filePath.slice(macFileBrowserHomePath.length)}`
+    : filePath;
+}
+
+function renderMacFileBrowser(data) {
+  macFileBrowserCurrentPath = data.currentPath || '';
+  macFileBrowserHomePath = data.homePath || macFileBrowserHomePath;
+  macFileBrowserParentPath = data.parentPath || '';
+  macFileBrowserPath.textContent = displayHomePath(macFileBrowserCurrentPath);
+  macFileBrowserUpButton.disabled = !macFileBrowserParentPath;
+
+  if (!data.items.length) {
+    macFileBrowserList.innerHTML = '<p class="muted">В этой папке нет Swagger/OpenAPI файлов.</p>';
+    return;
+  }
+
+  macFileBrowserList.innerHTML = data.items
+    .map((item) => {
+      const icon = item.type === 'directory' ? 'Папка' : 'Файл';
+      const meta = item.type === 'directory' ? 'папка' : formatFileSize(item.size);
+      return `<button class="fileBrowserItem" type="button" data-file-type="${escapeHtml(item.type)}" data-file-path="${escapeHtml(item.path)}">
+        <span>${icon}</span>
+        <strong>${escapeHtml(item.name)}</strong>
+        <small>${escapeHtml(meta)}</small>
+      </button>`;
+    })
+    .join('');
+}
+
+async function openMacFileBrowser(dir = '') {
+  macFileBrowser.classList.remove('hidden');
+  macFileBrowserList.innerHTML = '<p class="muted">Читаю папку...</p>';
+
+  try {
+    const query = dir ? `?dir=${encodeURIComponent(dir)}` : '';
+    const data = await requestJson(`/api/local-files${query}`);
+    renderMacFileBrowser(data);
+  } catch (error) {
+    macFileBrowserList.innerHTML = `<p class="muted">${escapeHtml(error.message)}</p>`;
+  }
+}
+
+async function loadLocalSwagger(filePath) {
+  swaggerState.textContent = `Читаю ${displayHomePath(filePath)}...`;
+
+  try {
+    const data = await requestJson('/api/swagger/local', {
+      method: 'POST',
+      body: JSON.stringify({ path: filePath }),
+    });
+    applySwaggerData(data, data.name || displayHomePath(filePath));
+    macFileBrowser.classList.add('hidden');
+  } catch (error) {
+    clearSwaggerData(error.message);
+  }
+}
+
 function toggleEndpointSelection(endpointId) {
   if (selectedEndpointIds.includes(endpointId)) {
     selectedEndpointIds = selectedEndpointIds.filter((id) => id !== endpointId);
@@ -886,27 +989,41 @@ swaggerInput.addEventListener('change', async () => {
       body: JSON.stringify({ name: file.name, content }),
     });
 
-    endpoints = data.endpoints;
-    selectedEndpointIds = [];
-    route = [];
-    loadProfileTargets = [];
-    syncAllLoadTargets();
-    swaggerState.textContent = `${data.title || file.name}: найдено ${endpoints.length} методов.`;
-    saveWorkspace();
-    renderMethods();
-    renderRoute();
-    renderLoadMethods();
+    applySwaggerData(data, file.name);
   } catch (error) {
-    endpoints = [];
-    selectedEndpointIds = [];
-    route = [];
-    localStorage.removeItem(workspaceStorageKey);
-    swaggerState.textContent = error.message;
-    renderMethods();
-    renderRoute();
-    renderLoadMethods();
+    clearSwaggerData(error.message);
   } finally {
     swaggerInput.value = '';
+  }
+});
+
+openMacSwaggerButton.addEventListener('click', () => {
+  openMacFileBrowser();
+});
+
+closeMacFileBrowserButton.addEventListener('click', () => {
+  macFileBrowser.classList.add('hidden');
+});
+
+macFileBrowserHomeButton.addEventListener('click', () => {
+  openMacFileBrowser(macFileBrowserHomePath);
+});
+
+macFileBrowserUpButton.addEventListener('click', () => {
+  if (macFileBrowserParentPath) {
+    openMacFileBrowser(macFileBrowserParentPath);
+  }
+});
+
+macFileBrowserList.addEventListener('click', (event) => {
+  const item = event.target.closest('[data-file-path]');
+  if (!item) return;
+
+  const filePath = item.dataset.filePath;
+  if (item.dataset.fileType === 'directory') {
+    openMacFileBrowser(filePath);
+  } else {
+    loadLocalSwagger(filePath);
   }
 });
 

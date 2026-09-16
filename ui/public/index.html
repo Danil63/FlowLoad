@@ -62,8 +62,26 @@
           <h2>Конструктор маршрута</h2>
           <p id="swaggerState" class="muted">Загрузи Swagger/OpenAPI файл, чтобы собрать маршрут из методов.</p>
         </div>
-        <label class="fileButton" for="swaggerInput">Загрузить Swagger</label>
+        <div class="swaggerActions">
+          <label class="fileButton" for="swaggerInput">Загрузить Swagger</label>
+          <button id="openMacSwaggerButton" class="ghost" type="button">Открыть из Mac</button>
+        </div>
         <input id="swaggerInput" class="visuallyHidden" type="file" accept=".json,.yaml,.yml,application/json,text/yaml,text/x-yaml">
+      </div>
+
+      <div id="macFileBrowser" class="fileBrowser hidden">
+        <div class="fileBrowserHead">
+          <div>
+            <strong>Выбор Swagger из Mac</strong>
+            <p id="macFileBrowserPath" class="muted">~</p>
+          </div>
+          <button id="closeMacFileBrowserButton" class="ghost" type="button">Закрыть</button>
+        </div>
+        <div class="fileBrowserActions">
+          <button id="macFileBrowserHomeButton" class="ghost" type="button">Домой</button>
+          <button id="macFileBrowserUpButton" class="ghost" type="button">На уровень выше</button>
+        </div>
+        <div id="macFileBrowserList" class="fileBrowserList"></div>
       </div>
 
       <div class="routeTools">
