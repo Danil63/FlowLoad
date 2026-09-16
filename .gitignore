@@ -13,3 +13,4 @@ load-testing/k6/results/
 # Local web UI state
 ui/node_modules/
 load-testing/routes/local/
+load-testing/load-profiles/local/

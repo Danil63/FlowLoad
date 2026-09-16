@@ -12,6 +12,7 @@ const k6Dir = path.join(rootDir, 'load-testing', 'k6');
 const tokensFile = path.join(k6Dir, 'tokens.txt');
 const resultsDir = path.join(k6Dir, 'results');
 const routesDir = path.join(rootDir, 'load-testing', 'routes', 'local');
+const loadProfilesDir = path.join(rootDir, 'load-testing', 'load-profiles', 'local');
 const port = Number(process.env.PORT || 8787);
 
 const runs = new Map();
@@ -21,6 +22,8 @@ const allowedRuns = {
   ping: { args: ['ping'], users: false },
   public: { args: ['public'], users: true },
   auth: { args: ['auth'], users: true },
+  route: { args: ['route'], users: true, routeFile: true },
+  profile: { args: ['profile'], users: false, profileFile: true },
   'auth-status': { args: ['auth-status'], users: false },
   'auth-1': { args: ['auth-1'], users: false },
   'auth-5': { args: ['auth-5'], users: false },
@@ -150,6 +153,36 @@ function slugify(value) {
   return slug || `route-${Date.now()}`;
 }
 
+function routePathForName(fileName) {
+  const safeName = path.basename(decodeURIComponent(String(fileName || '')));
+  if (!safeName.endsWith('.route.json')) {
+    throw new Error('Route file must end with .route.json');
+  }
+
+  return path.join(routesDir, safeName);
+}
+
+function loadProfilePathForName(fileName) {
+  const safeName = path.basename(decodeURIComponent(String(fileName || '')));
+  if (!safeName.endsWith('.load.json')) {
+    throw new Error('Load profile file must end with .load.json');
+  }
+
+  return path.join(loadProfilesDir, safeName);
+}
+
+async function readRouteFile(fileName) {
+  const routePath = routePathForName(fileName);
+  const raw = await fs.readFile(routePath, 'utf8');
+  return JSON.parse(raw);
+}
+
+async function readLoadProfileFile(fileName) {
+  const profilePath = loadProfilePathForName(fileName);
+  const raw = await fs.readFile(profilePath, 'utf8');
+  return JSON.parse(raw);
+}
+
 async function listRoutes() {
   try {
     const entries = await fs.readdir(routesDir, { withFileTypes: true });
@@ -171,6 +204,36 @@ async function listRoutes() {
 
     routes.sort((a, b) => b.updatedAt - a.updatedAt);
     return routes;
+  } catch (_error) {
+    return [];
+  }
+}
+
+async function listLoadProfiles() {
+  try {
+    const entries = await fs.readdir(loadProfilesDir, { withFileTypes: true });
+    const profiles = [];
+
+    for (const entry of entries) {
+      if (!entry.isFile() || !entry.name.endsWith('.load.json')) continue;
+
+      const fullPath = path.join(loadProfilesDir, entry.name);
+      const [raw, stat] = await Promise.all([fs.readFile(fullPath, 'utf8'), fs.stat(fullPath)]);
+      const profile = JSON.parse(raw);
+      const targets = Array.isArray(profile.targets) ? profile.targets : [];
+      const totalWeight = targets.reduce((sum, target) => sum + Number(target.weight || 0), 0);
+
+      profiles.push({
+        name: profile.name || entry.name.replace(/\.load\.json$/, ''),
+        fileName: entry.name,
+        targetsCount: targets.length,
+        totalWeight,
+        updatedAt: stat.mtimeMs,
+      });
+    }
+
+    profiles.sort((a, b) => b.updatedAt - a.updatedAt);
+    return profiles;
   } catch (_error) {
     return [];
   }
@@ -213,7 +276,12 @@ async function listReports() {
 }
 
 async function handleStatus(_req, res) {
-  const [tokenReady, reports, routes] = await Promise.all([hasRealTokens(), listReports(), listRoutes()]);
+  const [tokenReady, reports, routes, loadProfiles] = await Promise.all([
+    hasRealTokens(),
+    listReports(),
+    listRoutes(),
+    listLoadProfiles(),
+  ]);
   json(res, 200, {
     rootDir,
     tokenReady,
@@ -221,6 +289,7 @@ async function handleStatus(_req, res) {
     activeRun: activeRunId ? runs.get(activeRunId) : null,
     reports,
     routes,
+    loadProfiles,
   });
 }
 
@@ -302,7 +371,99 @@ async function saveRoute(req, res) {
   });
 }
 
-function createRun(command, args) {
+async function saveLoadProfile(req, res) {
+  const body = await readBody(req);
+  const name = String(body.name || '').trim();
+  const targets = Array.isArray(body.targets) ? body.targets : [];
+
+  if (!name) {
+    json(res, 400, { error: 'Load profile name is required' });
+    return;
+  }
+
+  if (!targets.length) {
+    json(res, 400, { error: 'Load profile must contain at least one method' });
+    return;
+  }
+
+  const normalizedTargets = targets.map((target, index) => ({
+    order: index + 1,
+    method: String(target.method || '').toUpperCase(),
+    path: String(target.path || ''),
+    summary: String(target.summary || ''),
+    operationId: String(target.operationId || ''),
+    tags: Array.isArray(target.tags) ? target.tags.map(String) : [],
+    authRequired: Boolean(target.authRequired),
+    risk: String(target.risk || 'read'),
+    expectStatus: Number(target.expectStatus || 200),
+    weight: Number(target.weight || 0),
+  }));
+
+  if (normalizedTargets.some((target) => !target.method || !target.path || target.weight <= 0)) {
+    json(res, 400, { error: 'Every load target must have method, path, and positive weight' });
+    return;
+  }
+
+  const profile = {
+    name,
+    createdAt: new Date().toISOString(),
+    targets: normalizedTargets,
+  };
+
+  await fs.mkdir(loadProfilesDir, { recursive: true });
+  const fileName = `${slugify(name)}.load.json`;
+  const profilePath = path.join(loadProfilesDir, fileName);
+  await fs.writeFile(profilePath, `${JSON.stringify(profile, null, 2)}\n`, { mode: 0o600 });
+  await fs.chmod(profilePath, 0o600).catch(() => {});
+
+  json(res, 200, {
+    ok: true,
+    profile: {
+      name: profile.name,
+      fileName,
+      targetsCount: profile.targets.length,
+      totalWeight: profile.targets.reduce((sum, target) => sum + target.weight, 0),
+    },
+  });
+}
+
+async function getRoute(req, res, fileName) {
+  try {
+    const route = await readRouteFile(fileName);
+    json(res, 200, { route });
+  } catch (_error) {
+    notFound(res);
+  }
+}
+
+async function deleteRoute(req, res, fileName) {
+  try {
+    await fs.unlink(routePathForName(fileName));
+    json(res, 200, { ok: true, routes: await listRoutes() });
+  } catch (_error) {
+    notFound(res);
+  }
+}
+
+async function getLoadProfile(req, res, fileName) {
+  try {
+    const profile = await readLoadProfileFile(fileName);
+    json(res, 200, { profile });
+  } catch (_error) {
+    notFound(res);
+  }
+}
+
+async function deleteLoadProfile(req, res, fileName) {
+  try {
+    await fs.unlink(loadProfilePathForName(fileName));
+    json(res, 200, { ok: true, loadProfiles: await listLoadProfiles() });
+  } catch (_error) {
+    notFound(res);
+  }
+}
+
+function createRun(command, args, extraEnv = {}) {
   const id = `${Date.now()}-${Math.random().toString(16).slice(2)}`;
   const run = {
     id,
@@ -322,6 +483,7 @@ function createRun(command, args) {
     cwd: rootDir,
     env: {
       ...process.env,
+      ...extraEnv,
       OPEN_REPORT: 'true',
     },
   });
@@ -374,6 +536,7 @@ async function startRun(req, res) {
 
   const args = [...config.args];
   const users = String(body.users || '').trim();
+  const extraEnv = {};
 
   if (config.users && users) {
     if (!/^\d+$/.test(users) || Number(users) < 1 || Number(users) > 10000) {
@@ -384,7 +547,31 @@ async function startRun(req, res) {
     args.push(users);
   }
 
-  const run = createRun(command, args);
+  if (config.routeFile) {
+    const routeFileName = String(body.routeFile || '').trim();
+    if (!routeFileName) {
+      json(res, 400, { error: 'Route file is required' });
+      return;
+    }
+
+    const routePath = routePathForName(routeFileName);
+    await fs.access(routePath);
+    extraEnv.CUSTOM_ROUTE_FILE = routePath;
+  }
+
+  if (config.profileFile) {
+    const profileFileName = String(body.profileFile || '').trim();
+    if (!profileFileName) {
+      json(res, 400, { error: 'Load profile file is required' });
+      return;
+    }
+
+    const profilePath = loadProfilePathForName(profileFileName);
+    await fs.access(profilePath);
+    extraEnv.CUSTOM_LOAD_PROFILE_FILE = profilePath;
+  }
+
+  const run = createRun(command, args, extraEnv);
   json(res, 202, { run });
 }
 
@@ -460,6 +647,36 @@ const server = createServer(async (req, res) => {
 
     if (req.method === 'POST' && url.pathname === '/api/routes') {
       await saveRoute(req, res);
+      return;
+    }
+
+    if (req.method === 'GET' && url.pathname.startsWith('/api/routes/')) {
+      await getRoute(req, res, url.pathname.slice('/api/routes/'.length));
+      return;
+    }
+
+    if (req.method === 'DELETE' && url.pathname.startsWith('/api/routes/')) {
+      await deleteRoute(req, res, url.pathname.slice('/api/routes/'.length));
+      return;
+    }
+
+    if (req.method === 'GET' && url.pathname === '/api/load-profiles') {
+      json(res, 200, { loadProfiles: await listLoadProfiles() });
+      return;
+    }
+
+    if (req.method === 'POST' && url.pathname === '/api/load-profiles') {
+      await saveLoadProfile(req, res);
+      return;
+    }
+
+    if (req.method === 'GET' && url.pathname.startsWith('/api/load-profiles/')) {
+      await getLoadProfile(req, res, url.pathname.slice('/api/load-profiles/'.length));
+      return;
+    }
+
+    if (req.method === 'DELETE' && url.pathname.startsWith('/api/load-profiles/')) {
+      await deleteLoadProfile(req, res, url.pathname.slice('/api/load-profiles/'.length));
       return;
     }
 

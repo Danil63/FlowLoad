@@ -5,6 +5,10 @@ const tokenState = document.querySelector('#tokenState');
 const runForm = document.querySelector('#runForm');
 const commandSelect = document.querySelector('#commandSelect');
 const usersInput = document.querySelector('#usersInput');
+const routeSelectLabel = document.querySelector('#routeSelectLabel');
+const routeSelect = document.querySelector('#routeSelect');
+const profileSelectLabel = document.querySelector('#profileSelectLabel');
+const profileSelect = document.querySelector('#profileSelect');
 const runButton = document.querySelector('#runButton');
 const runBadge = document.querySelector('#runBadge');
 const runOutput = document.querySelector('#runOutput');
@@ -25,13 +29,27 @@ const clearRouteButton = document.querySelector('#clearRouteButton');
 const saveRouteButton = document.querySelector('#saveRouteButton');
 const routesRefreshButton = document.querySelector('#routesRefreshButton');
 const savedRoutesList = document.querySelector('#savedRoutesList');
+const loadProfileState = document.querySelector('#loadProfileState');
+const loadMethodSearchInput = document.querySelector('#loadMethodSearchInput');
+const loadProfileNameInput = document.querySelector('#loadProfileNameInput');
+const loadMethodList = document.querySelector('#loadMethodList');
+const loadMethodCount = document.querySelector('#loadMethodCount');
+const loadChart = document.querySelector('.loadChart');
+const loadTargetsList = document.querySelector('#loadTargetsList');
+const saveLoadProfileButton = document.querySelector('#saveLoadProfileButton');
+const clearLoadProfileButton = document.querySelector('#clearLoadProfileButton');
+const savedLoadProfilesList = document.querySelector('#savedLoadProfilesList');
 
 let pollTimer = null;
 let endpoints = [];
 let selectedEndpointIds = [];
 let route = [];
+let savedRoutes = [];
+let loadProfileTargets = [];
+let savedLoadProfiles = [];
 
 const workspaceStorageKey = 'bigJourneyK6RouteBuilder';
+const loadProfileStorageKey = 'bigJourneyK6LoadProfileBuilder';
 
 async function requestJson(url, options = {}) {
   const response = await fetch(url, {
@@ -105,6 +123,26 @@ function selectedEndpoint(id) {
 
 function filteredEndpoints() {
   const query = methodSearchInput.value.trim().toLowerCase();
+  if (!query) return endpoints;
+
+  return endpoints.filter((endpoint) => {
+    const haystack = [
+      endpoint.method,
+      endpoint.path,
+      endpoint.summary,
+      endpoint.operationId,
+      endpoint.tags.join(' '),
+      endpoint.risk,
+    ]
+      .join(' ')
+      .toLowerCase();
+
+    return haystack.includes(query);
+  });
+}
+
+function filteredLoadEndpoints() {
+  const query = loadMethodSearchInput.value.trim().toLowerCase();
   if (!query) return endpoints;
 
   return endpoints.filter((endpoint) => {
@@ -201,6 +239,9 @@ function renderRoute() {
 }
 
 function renderSavedRoutes(routes = []) {
+  savedRoutes = routes;
+  renderRouteOptions();
+
   if (!routes.length) {
     savedRoutesList.innerHTML = '<p class="muted">Сохраненных маршрутов пока нет.</p>';
     return;
@@ -210,8 +251,177 @@ function renderSavedRoutes(routes = []) {
     .map((savedRoute) => {
       const date = new Date(savedRoute.updatedAt).toLocaleString('ru-RU');
       return `<div class="savedRoute">
-        <strong>${escapeHtml(savedRoute.name)}</strong>
-        <span>${savedRoute.stepsCount} шагов · ${date}</span>
+        <div class="savedRouteInfo">
+          <strong>${escapeHtml(savedRoute.name)}</strong>
+          <span>${savedRoute.stepsCount} шагов · ${date}</span>
+        </div>
+        <div class="savedRouteActions">
+          <button class="ghost" type="button" data-route-action="load" data-route-file="${escapeHtml(savedRoute.fileName)}">Открыть</button>
+          <button class="ghost dangerButton" type="button" data-route-action="delete" data-route-file="${escapeHtml(savedRoute.fileName)}">Удалить</button>
+        </div>
+      </div>`;
+    })
+    .join('');
+}
+
+function renderRouteOptions() {
+  if (!savedRoutes.length) {
+    routeSelect.innerHTML = '<option value="">Нет сохраненных маршрутов</option>';
+    routeSelect.disabled = true;
+    return;
+  }
+
+  const previousValue = routeSelect.value;
+  routeSelect.innerHTML = savedRoutes
+    .map((savedRoute) => `<option value="${escapeHtml(savedRoute.fileName)}">${escapeHtml(savedRoute.name)} (${savedRoute.stepsCount})</option>`)
+    .join('');
+  routeSelect.disabled = false;
+
+  if (savedRoutes.some((savedRoute) => savedRoute.fileName === previousValue)) {
+    routeSelect.value = previousValue;
+  }
+}
+
+function renderLoadProfileOptions() {
+  if (!savedLoadProfiles.length) {
+    profileSelect.innerHTML = '<option value="">Нет сохраненных профилей</option>';
+    profileSelect.disabled = true;
+    return;
+  }
+
+  const previousValue = profileSelect.value;
+  profileSelect.innerHTML = savedLoadProfiles
+    .map(
+      (profile) =>
+        `<option value="${escapeHtml(profile.fileName)}">${escapeHtml(profile.name)} (${profile.targetsCount} методов)</option>`,
+    )
+    .join('');
+  profileSelect.disabled = false;
+
+  if (savedLoadProfiles.some((profile) => profile.fileName === previousValue)) {
+    profileSelect.value = previousValue;
+  }
+}
+
+function endpointToLoadTarget(endpoint, vus = 10) {
+  if (!endpoint) return null;
+  return {
+    method: endpoint.method,
+    path: endpoint.path,
+    summary: endpoint.summary,
+    operationId: endpoint.operationId,
+    tags: endpoint.tags,
+    authRequired: endpoint.authRequired,
+    risk: endpoint.risk,
+    expectStatus: 200,
+    weight: vus,
+  };
+}
+
+function loadProfileTotal() {
+  return loadProfileTargets.reduce((sum, target) => sum + Number(target.weight || 0), 0);
+}
+
+function renderLoadMethods() {
+  const visibleEndpoints = filteredLoadEndpoints();
+  loadMethodCount.textContent = `${visibleEndpoints.length} из ${endpoints.length} методов`;
+
+  if (!endpoints.length) {
+    loadMethodList.innerHTML = '<p class="muted">Пока нет загруженных методов.</p>';
+    renderLoadTargets();
+    return;
+  }
+
+  if (!visibleEndpoints.length) {
+    loadMethodList.innerHTML = '<p class="muted">Ничего не найдено. Попробуй другой запрос.</p>';
+    renderLoadTargets();
+    return;
+  }
+
+  loadMethodList.innerHTML = visibleEndpoints
+    .map((endpoint) => {
+      const summary = endpoint.summary ? `<p>${escapeHtml(endpoint.summary)}</p>` : '';
+      const auth = endpoint.authRequired ? '<span class="metaPill">auth</span>' : '<span class="metaPill">public</span>';
+
+      return `<button class="methodCard" type="button" draggable="true" data-load-endpoint-id="${escapeHtml(endpoint.id)}">
+        <span class="methodCardTop">
+          <span class="${methodClass(endpoint.method)}">${escapeHtml(endpoint.method)}</span>
+          <span class="risk risk-${escapeHtml(endpoint.risk)}">${escapeHtml(riskLabel(endpoint.risk))}</span>
+        </span>
+        <strong>${escapeHtml(endpoint.path)}</strong>
+        ${summary}
+        <span class="methodMeta">${auth}<span class="metaPill">${escapeHtml(endpoint.tags[0] || 'api')}</span></span>
+      </button>`;
+    })
+    .join('');
+
+  renderLoadTargets();
+}
+
+function renderLoadTargets() {
+  const total = loadProfileTotal();
+  saveLoadProfileButton.disabled = loadProfileTargets.length === 0;
+
+  if (!loadProfileTargets.length) {
+    loadTargetsList.className = 'loadTargetsList empty';
+    loadTargetsList.textContent = 'Перетащи методы сюда или нажми на метод в нижней полке.';
+    return;
+  }
+
+  const maxWeight = Math.max(...loadProfileTargets.map((target) => Number(target.weight || 0)), 1);
+  loadTargetsList.className = 'loadTargetsList';
+  loadTargetsList.style.setProperty('--load-count', String(loadProfileTargets.length));
+  loadTargetsList.innerHTML = loadProfileTargets
+    .map((target, index) => {
+      const weight = Number(target.weight || 0);
+      const percent = total > 0 ? Math.round((weight / total) * 100) : 0;
+      const height = Math.max(18, Math.round((weight / maxWeight) * 128));
+      const summary = target.summary ? `<p>${escapeHtml(target.summary)}</p>` : '';
+
+      return `<div class="loadTarget" data-load-target-index="${index}" style="--point-height: ${height}px">
+        <div class="loadPoint">
+          <span class="loadPointDot" title="${weight} VUs"></span>
+          <span class="loadPointLine"></span>
+        </div>
+        <div class="loadTargetCard">
+          <div class="loadTargetTop">
+            <span class="${methodClass(target.method)}">${escapeHtml(target.method)}</span>
+            <button class="iconButton dangerButton" type="button" data-load-action="remove" data-index="${index}" title="Удалить">×</button>
+          </div>
+          <strong>${escapeHtml(target.path)}</strong>
+          ${summary}
+          <label>
+            VUs на метод
+            <input class="loadWeightInput" type="number" min="1" max="10000" value="${weight}" data-load-weight-index="${index}">
+          </label>
+          <span class="loadPercent">${percent}% от профиля</span>
+        </div>
+      </div>`;
+    })
+    .join('');
+}
+
+function renderSavedLoadProfiles(profiles = []) {
+  savedLoadProfiles = profiles;
+  renderLoadProfileOptions();
+
+  if (!profiles.length) {
+    savedLoadProfilesList.innerHTML = '<p class="muted">Сохраненных профилей пока нет.</p>';
+    return;
+  }
+
+  savedLoadProfilesList.innerHTML = profiles
+    .map((profile) => {
+      const date = new Date(profile.updatedAt).toLocaleString('ru-RU');
+      return `<div class="savedRoute">
+        <div class="savedRouteInfo">
+          <strong>${escapeHtml(profile.name)}</strong>
+          <span>${profile.targetsCount} методов · ${profile.totalWeight} VUs · ${date}</span>
+        </div>
+        <div class="savedRouteActions">
+          <button class="ghost" type="button" data-load-profile-action="load" data-load-profile-file="${escapeHtml(profile.fileName)}">Открыть</button>
+          <button class="ghost dangerButton" type="button" data-load-profile-action="delete" data-load-profile-file="${escapeHtml(profile.fileName)}">Удалить</button>
+        </div>
       </div>`;
     })
     .join('');
@@ -224,6 +434,17 @@ function saveWorkspace() {
       endpoints,
       route,
       routeName: routeNameInput.value,
+      savedAt: Date.now(),
+    }),
+  );
+}
+
+function saveLoadProfileWorkspace() {
+  localStorage.setItem(
+    loadProfileStorageKey,
+    JSON.stringify({
+      loadProfileTargets,
+      loadProfileName: loadProfileNameInput.value,
       savedAt: Date.now(),
     }),
   );
@@ -250,6 +471,22 @@ function restoreWorkspace() {
   }
 }
 
+function restoreLoadProfileWorkspace() {
+  try {
+    const raw = localStorage.getItem(loadProfileStorageKey);
+    if (!raw) return;
+
+    const saved = JSON.parse(raw);
+    loadProfileTargets = Array.isArray(saved.loadProfileTargets) ? saved.loadProfileTargets : [];
+
+    if (saved.loadProfileName) {
+      loadProfileNameInput.value = saved.loadProfileName;
+    }
+  } catch (_error) {
+    localStorage.removeItem(loadProfileStorageKey);
+  }
+}
+
 function renderRun(run) {
   if (!run) {
     setBadge('idle');
@@ -273,10 +510,91 @@ async function refresh() {
   renderRun(data.activeRun);
   renderReports(data.reports);
   renderSavedRoutes(data.routes || []);
+  renderSavedLoadProfiles(data.loadProfiles || []);
 
   if (data.activeRunId && !pollTimer) {
     startPolling();
   }
+}
+
+async function loadSavedRoute(fileName) {
+  const data = await requestJson(`/api/routes/${encodeURIComponent(fileName)}`);
+  const savedRoute = data.route;
+
+  routeNameInput.value = savedRoute.name || fileName.replace(/\.route\.json$/, '');
+  route = Array.isArray(savedRoute.steps)
+    ? savedRoute.steps.map((step) => ({
+        method: step.method,
+        path: step.path,
+        summary: step.summary,
+        operationId: step.operationId,
+        tags: Array.isArray(step.tags) ? step.tags : [],
+        authRequired: Boolean(step.authRequired),
+        risk: step.risk || 'read',
+        expectStatus: Number(step.expectStatus || 200),
+      }))
+    : [];
+  selectedEndpointIds = [];
+  saveWorkspace();
+  renderMethods();
+  renderRoute();
+  swaggerState.textContent = `Маршрут "${routeNameInput.value}" открыт в конструкторе.`;
+}
+
+async function deleteSavedRoute(fileName) {
+  const savedRoute = savedRoutes.find((item) => item.fileName === fileName);
+  const name = savedRoute?.name || fileName;
+
+  if (!window.confirm(`Удалить маршрут "${name}"?`)) {
+    return;
+  }
+
+  await requestJson(`/api/routes/${encodeURIComponent(fileName)}`, { method: 'DELETE' });
+  if (routeSelect.value === fileName) {
+    routeSelect.value = '';
+  }
+  await refresh();
+  swaggerState.textContent = `Маршрут "${name}" удален.`;
+}
+
+async function loadSavedLoadProfile(fileName) {
+  const data = await requestJson(`/api/load-profiles/${encodeURIComponent(fileName)}`);
+  const profile = data.profile;
+
+  loadProfileNameInput.value = profile.name || fileName.replace(/\.load\.json$/, '');
+  loadProfileTargets = Array.isArray(profile.targets)
+    ? profile.targets.map((target) => ({
+        method: target.method,
+        path: target.path,
+        summary: target.summary,
+        operationId: target.operationId,
+        tags: Array.isArray(target.tags) ? target.tags : [],
+        authRequired: Boolean(target.authRequired),
+        risk: target.risk || 'read',
+        expectStatus: Number(target.expectStatus || 200),
+        weight: Number(target.weight || 1),
+      }))
+    : [];
+
+  saveLoadProfileWorkspace();
+  renderLoadMethods();
+  loadProfileState.textContent = `Профиль "${loadProfileNameInput.value}" открыт в конструкторе.`;
+}
+
+async function deleteSavedLoadProfile(fileName) {
+  const savedProfile = savedLoadProfiles.find((item) => item.fileName === fileName);
+  const name = savedProfile?.name || fileName;
+
+  if (!window.confirm(`Удалить профиль нагрузки "${name}"?`)) {
+    return;
+  }
+
+  await requestJson(`/api/load-profiles/${encodeURIComponent(fileName)}`, { method: 'DELETE' });
+  if (profileSelect.value === fileName) {
+    profileSelect.value = '';
+  }
+  await refresh();
+  loadProfileState.textContent = `Профиль "${name}" удален.`;
 }
 
 function toggleEndpointSelection(endpointId) {
@@ -310,6 +628,24 @@ function addEndpointToRoute(endpoint, index = route.length) {
   saveWorkspace();
 }
 
+function addEndpointToLoadProfile(endpoint) {
+  const target = endpointToLoadTarget(endpoint);
+  if (!target) return;
+
+  const existingTarget = loadProfileTargets.find(
+    (item) => item.method === target.method && item.path === target.path,
+  );
+
+  if (existingTarget) {
+    existingTarget.weight = Number(existingTarget.weight || 0) + 10;
+  } else {
+    loadProfileTargets.push(target);
+  }
+
+  saveLoadProfileWorkspace();
+  renderLoadTargets();
+}
+
 function moveRouteStep(fromIndex, toIndex) {
   if (toIndex < 0 || toIndex >= route.length) return;
   const [step] = route.splice(fromIndex, 1);
@@ -341,6 +677,7 @@ function dropIndexFromEvent(event) {
 
 function clearDragState() {
   routeCanvas.classList.remove('dragOver');
+  loadChart.classList.remove('dragOver');
   document.querySelectorAll('.dragging').forEach((element) => {
     element.classList.remove('dragging');
   });
@@ -382,11 +719,21 @@ runForm.addEventListener('submit', async (event) => {
   event.preventDefault();
   const command = commandSelect.value;
   const users = usersInput.value.trim();
+  const routeFile = routeSelect.value;
+  const profileFile = profileSelect.value;
 
   try {
+    if (command === 'route' && !routeFile) {
+      throw new Error('Выбери сохраненный маршрут для запуска.');
+    }
+
+    if (command === 'profile' && !profileFile) {
+      throw new Error('Выбери сохраненный профиль нагрузки для запуска.');
+    }
+
     const data = await requestJson('/api/run', {
       method: 'POST',
-      body: JSON.stringify({ command, users }),
+      body: JSON.stringify({ command, users, routeFile, profileFile }),
     });
     renderRun(data.run);
     startPolling();
@@ -396,12 +743,52 @@ runForm.addEventListener('submit', async (event) => {
 });
 
 commandSelect.addEventListener('change', () => {
-  usersInput.disabled = !['public', 'auth'].includes(commandSelect.value);
+  const routeMode = commandSelect.value === 'route';
+  const profileMode = commandSelect.value === 'profile';
+  usersInput.disabled = !['public', 'auth', 'route'].includes(commandSelect.value);
+  routeSelect.classList.toggle('hidden', !routeMode);
+  routeSelectLabel.classList.toggle('hidden', !routeMode);
+  profileSelect.classList.toggle('hidden', !profileMode);
+  profileSelectLabel.classList.toggle('hidden', !profileMode);
 });
 
 refreshButton.addEventListener('click', refresh);
 reportsButton.addEventListener('click', refresh);
 routesRefreshButton.addEventListener('click', refresh);
+
+savedRoutesList.addEventListener('click', async (event) => {
+  const button = event.target.closest('[data-route-action]');
+  if (!button) return;
+
+  try {
+    if (button.dataset.routeAction === 'load') {
+      await loadSavedRoute(button.dataset.routeFile);
+    }
+
+    if (button.dataset.routeAction === 'delete') {
+      await deleteSavedRoute(button.dataset.routeFile);
+    }
+  } catch (error) {
+    swaggerState.textContent = error.message;
+  }
+});
+
+savedLoadProfilesList.addEventListener('click', async (event) => {
+  const button = event.target.closest('[data-load-profile-action]');
+  if (!button) return;
+
+  try {
+    if (button.dataset.loadProfileAction === 'load') {
+      await loadSavedLoadProfile(button.dataset.loadProfileFile);
+    }
+
+    if (button.dataset.loadProfileAction === 'delete') {
+      await deleteSavedLoadProfile(button.dataset.loadProfileFile);
+    }
+  } catch (error) {
+    loadProfileState.textContent = error.message;
+  }
+});
 
 swaggerInput.addEventListener('change', async () => {
   const file = swaggerInput.files?.[0];
@@ -423,6 +810,7 @@ swaggerInput.addEventListener('change', async () => {
     saveWorkspace();
     renderMethods();
     renderRoute();
+    renderLoadMethods();
   } catch (error) {
     endpoints = [];
     selectedEndpointIds = [];
@@ -431,12 +819,14 @@ swaggerInput.addEventListener('change', async () => {
     swaggerState.textContent = error.message;
     renderMethods();
     renderRoute();
+    renderLoadMethods();
   } finally {
     swaggerInput.value = '';
   }
 });
 
 methodSearchInput.addEventListener('input', renderMethods);
+loadMethodSearchInput.addEventListener('input', renderLoadMethods);
 
 methodList.addEventListener('click', (event) => {
   const card = event.target.closest('[data-endpoint-id]');
@@ -456,6 +846,24 @@ methodList.addEventListener('dragstart', (event) => {
 
 methodList.addEventListener('dragend', clearDragState);
 
+loadMethodList.addEventListener('click', (event) => {
+  const card = event.target.closest('[data-load-endpoint-id]');
+  if (!card) return;
+
+  addEndpointToLoadProfile(selectedEndpoint(card.dataset.loadEndpointId));
+});
+
+loadMethodList.addEventListener('dragstart', (event) => {
+  const card = event.target.closest('[data-load-endpoint-id]');
+  if (!card) return;
+
+  event.dataTransfer.effectAllowed = 'copy';
+  event.dataTransfer.setData('application/x-load-endpoint-id', card.dataset.loadEndpointId);
+  card.classList.add('dragging');
+});
+
+loadMethodList.addEventListener('dragend', clearDragState);
+
 addSelectedButton.addEventListener('click', () => {
   addEndpointToRoute(selectedEndpoint(selectedEndpointIds[0]));
   selectedEndpointIds = [];
@@ -468,6 +876,34 @@ connectButton.addEventListener('click', () => {
   selectedEndpointIds = [];
   renderMethods();
   renderRoute();
+});
+
+loadChart.addEventListener('dragover', (event) => {
+  const types = Array.from(event.dataTransfer.types);
+  if (!types.includes('application/x-load-endpoint-id')) {
+    return;
+  }
+
+  event.preventDefault();
+  loadChart.classList.add('dragOver');
+  event.dataTransfer.dropEffect = 'copy';
+});
+
+loadChart.addEventListener('dragleave', (event) => {
+  if (!loadChart.contains(event.relatedTarget)) {
+    loadChart.classList.remove('dragOver');
+  }
+});
+
+loadChart.addEventListener('drop', (event) => {
+  event.preventDefault();
+  const endpointId = event.dataTransfer.getData('application/x-load-endpoint-id');
+
+  if (endpointId) {
+    addEndpointToLoadProfile(selectedEndpoint(endpointId));
+  }
+
+  clearDragState();
 });
 
 routeCanvas.addEventListener('dragover', (event) => {
@@ -534,6 +970,29 @@ routeSteps.addEventListener('click', (event) => {
   }
 });
 
+loadTargetsList.addEventListener('change', (event) => {
+  const input = event.target.closest('[data-load-weight-index]');
+  if (!input) return;
+
+  const index = Number(input.dataset.loadWeightIndex);
+  const value = Math.max(1, Math.min(10000, Number(input.value || 1)));
+  loadProfileTargets[index].weight = value;
+  saveLoadProfileWorkspace();
+  renderLoadTargets();
+});
+
+loadTargetsList.addEventListener('click', (event) => {
+  const button = event.target.closest('[data-load-action]');
+  if (!button) return;
+
+  const index = Number(button.dataset.index);
+  if (button.dataset.loadAction === 'remove') {
+    loadProfileTargets.splice(index, 1);
+    saveLoadProfileWorkspace();
+    renderLoadTargets();
+  }
+});
+
 clearRouteButton.addEventListener('click', () => {
   route = [];
   selectedEndpointIds = [];
@@ -543,6 +1002,13 @@ clearRouteButton.addEventListener('click', () => {
 });
 
 routeNameInput.addEventListener('input', saveWorkspace);
+loadProfileNameInput.addEventListener('input', saveLoadProfileWorkspace);
+
+clearLoadProfileButton.addEventListener('click', () => {
+  loadProfileTargets = [];
+  saveLoadProfileWorkspace();
+  renderLoadTargets();
+});
 
 saveRouteButton.addEventListener('click', async () => {
   const name = routeNameInput.value.trim();
@@ -560,10 +1026,28 @@ saveRouteButton.addEventListener('click', async () => {
   }
 });
 
+saveLoadProfileButton.addEventListener('click', async () => {
+  const name = loadProfileNameInput.value.trim();
+
+  try {
+    const data = await requestJson('/api/load-profiles', {
+      method: 'POST',
+      body: JSON.stringify({ name, targets: loadProfileTargets }),
+    });
+
+    loadProfileState.textContent = `Профиль "${data.profile.name}" сохранен: ${data.profile.targetsCount} методов, ${data.profile.totalWeight} VUs.`;
+    await refresh();
+  } catch (error) {
+    loadProfileState.textContent = error.message;
+  }
+});
+
 commandSelect.dispatchEvent(new Event('change'));
 restoreWorkspace();
+restoreLoadProfileWorkspace();
 renderMethods();
 renderRoute();
+renderLoadMethods();
 refresh().catch((error) => {
   statusText.textContent = error.message;
 });

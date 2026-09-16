@@ -1,12 +1,14 @@
 .DEFAULT_GOAL := help
 
-.PHONY: help start setup token init ui check ping public public-report public-10 public-50 public-100 public-300 auth auth-report auth-dashboard auth-status auth-debug auth-1 auth-5 auth-50 auth-100 flight-once browser browser-dashboard grafana-check public-grafana auth-grafana dist dist-public dist-auth dist-flight k6-check k6-public k6-public-report k6-auth k6-auth-dashboard k6-auth-report k6-auth-status k6-flight-once k6-browser-flight-smoke k6-browser-flight-dashboard k6-grafana k6-distributed
+.PHONY: help start setup token init ui check ping public public-report public-10 public-50 public-100 public-300 auth auth-report auth-dashboard auth-status auth-debug auth-1 auth-5 auth-50 auth-100 route profile flight-once browser browser-dashboard grafana-check public-grafana auth-grafana dist dist-public dist-auth dist-flight k6-check k6-public k6-public-report k6-auth k6-auth-dashboard k6-auth-report k6-auth-status k6-custom-route-report k6-load-profile-report k6-flight-once k6-browser-flight-smoke k6-browser-flight-dashboard k6-grafana k6-distributed
 
 K6_DIR := load-testing/k6
 K6_SCENARIOS := $(K6_DIR)/scenarios
 K6_RESULTS := $(K6_DIR)/results
 K6_ENV := $(K6_DIR)/.env
 TOKENS_FILE ?= $(K6_DIR)/tokens.txt
+CUSTOM_ROUTE_FILE ?=
+CUSTOM_LOAD_PROFILE_FILE ?=
 REPORT_TS := $(shell date +%Y%m%d-%H%M%S)
 TEST_ID ?= $(REPORT_TS)
 
@@ -54,6 +56,8 @@ SESSION_TOKENS_FOR_K6 := $(or $(SESSION_TOKENS),$(MAKEFILE_SESSION_TOKENS))
 PUBLIC_VUS_FOR_K6 := $(or $(REQUESTED_USERS),$(VUS))
 AUTH_VUS_FOR_K6 := $(or $(REQUESTED_USERS),$(AUTH_VUS))
 TOKENS_FILE_ABS := $(abspath $(TOKENS_FILE))
+CUSTOM_ROUTE_FILE_ABS := $(abspath $(CUSTOM_ROUTE_FILE))
+CUSTOM_LOAD_PROFILE_FILE_ABS := $(abspath $(CUSTOM_LOAD_PROFILE_FILE))
 
 help:
 	@echo "Short k6 commands:"
@@ -66,6 +70,8 @@ help:
 	@echo "  make ping             Check API host and /health response"
 	@echo "  make public 200       Public read-only with 200 VUs, Russian report"
 	@echo "  make auth 5           Auth read-only with 5 VUs"
+	@echo "  make route USERS=5 CUSTOM_ROUTE_FILE=load-testing/routes/local/name.route.json"
+	@echo "  make profile CUSTOM_LOAD_PROFILE_FILE=load-testing/load-profiles/local/name.load.json"
 	@echo "  make public USERS=50  Public read-only with any VUs, Russian report"
 	@echo "  make auth USERS=5     Auth read-only with any VUs"
 	@echo "  make public-10        Public read-only, 10 VUs, Russian report"
@@ -252,6 +258,55 @@ k6-auth-status:
 		-e SESSION_TOKENS="$(SESSION_TOKENS_FOR_K6)" \
 		-e TOKENS_FILE="$(TOKENS_FILE_ABS)" \
 		$(K6_SCENARIOS)/auth-status.js; \
+	status=$$?; \
+	if [ "$(OPEN_REPORT)" = "true" ] && [ -f "$$report" ]; then \
+		echo "Opening report: $$report"; \
+		open "$$report" >/dev/null 2>&1 || true; \
+	fi; \
+	exit $$status
+
+route: k6-custom-route-report
+
+k6-custom-route-report:
+	@test -n "$(CUSTOM_ROUTE_FILE)" || (echo "Select a saved route in the web UI or run CUSTOM_ROUTE_FILE=load-testing/routes/local/name.route.json make route 5"; exit 1)
+	@mkdir -p $(K6_RESULTS)
+	@report="$(K6_RESULTS)/custom-route-ru-$(REPORT_TS).html"; \
+	RU_REPORT="$$report" k6 run \
+		-e BASE_URL="$(BASE_URL)" \
+		-e SESSION_TOKEN="$(SESSION_TOKEN_FOR_K6)" \
+		-e SESSION_TOKENS="$(SESSION_TOKENS_FOR_K6)" \
+		-e TOKENS_FILE="$(TOKENS_FILE_ABS)" \
+		-e CUSTOM_ROUTE_FILE="$(CUSTOM_ROUTE_FILE_ABS)" \
+		-e VUS="$(PUBLIC_VUS_FOR_K6)" \
+		-e RAMP_UP="$(RAMP_UP)" \
+		-e HOLD="$(HOLD)" \
+		-e RAMP_DOWN="$(RAMP_DOWN)" \
+		-e THINK_TIME_SECONDS="$(THINK_TIME_SECONDS)" \
+		$(K6_SCENARIOS)/custom-route.js; \
+	status=$$?; \
+	if [ "$(OPEN_REPORT)" = "true" ] && [ -f "$$report" ]; then \
+		echo "Opening report: $$report"; \
+		open "$$report" >/dev/null 2>&1 || true; \
+	fi; \
+	exit $$status
+
+profile: k6-load-profile-report
+
+k6-load-profile-report:
+	@test -n "$(CUSTOM_LOAD_PROFILE_FILE)" || (echo "Select a load profile in the web UI or run CUSTOM_LOAD_PROFILE_FILE=load-testing/load-profiles/local/name.load.json make profile"; exit 1)
+	@mkdir -p $(K6_RESULTS)
+	@report="$(K6_RESULTS)/load-profile-ru-$(REPORT_TS).html"; \
+	RU_REPORT="$$report" k6 run \
+		-e BASE_URL="$(BASE_URL)" \
+		-e SESSION_TOKEN="$(SESSION_TOKEN_FOR_K6)" \
+		-e SESSION_TOKENS="$(SESSION_TOKENS_FOR_K6)" \
+		-e TOKENS_FILE="$(TOKENS_FILE_ABS)" \
+		-e CUSTOM_LOAD_PROFILE_FILE="$(CUSTOM_LOAD_PROFILE_FILE_ABS)" \
+		-e RAMP_UP="$(RAMP_UP)" \
+		-e HOLD="$(HOLD)" \
+		-e RAMP_DOWN="$(RAMP_DOWN)" \
+		-e THINK_TIME_SECONDS="$(THINK_TIME_SECONDS)" \
+		$(K6_SCENARIOS)/load-profile.js; \
 	status=$$?; \
 	if [ "$(OPEN_REPORT)" = "true" ] && [ -f "$$report" ]; then \
 		echo "Opening report: $$report"; \

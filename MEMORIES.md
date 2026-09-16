@@ -28,6 +28,11 @@ a Swagger file, search methods, drag methods into the route canvas, reorder step
 or select two methods and connect them in sequence. Saved route files are created
 under `load-testing/routes/local/` and are ignored by git.
 
+The local web UI also includes a method load profile builder. A teammate can use
+the same uploaded Swagger file, drag methods into the load chart, set VUs for
+each method, save the profile, and run it from the UI. Saved load profile files
+are created under `load-testing/load-profiles/local/` and are ignored by git.
+
 If token setup was skipped:
 
 ```bash
@@ -66,6 +71,25 @@ scenarios.
 | Reorder or remove | Adjusts step order before saving | Final sequence matches the business route |
 | Save route | Writes local `.route.json` file | Route appears in saved route list |
 
+## Local Load Profile Builder
+
+Use it when a project needs to control how much pressure each API method receives.
+
+| UI step | What it does | Positive result |
+| --- | --- | --- |
+| Upload Swagger/OpenAPI | Reads API methods from the project contract | Method shelf is filled |
+| Search methods | Filters methods by method, path, summary, operation id, tag, or risk | Needed method is easy to find |
+| Drag or click method | Adds method to the load chart | Method appears as a chart point |
+| Set VUs on method | Defines how many virtual users target this exact method | Top circle moves higher or lower |
+| Save profile | Writes local `.load.json` file | Profile appears in saved profile list |
+| Run profile | Starts k6 with one scenario per selected method | Each method receives its configured VUs |
+
+Manual command shape:
+
+```bash
+make profile CUSTOM_LOAD_PROFILE_FILE=load-testing/load-profiles/local/name.load.json
+```
+
 Risk labels in the builder:
 
 | Label | Meaning |
@@ -87,6 +111,7 @@ Risk labels in the builder:
 | `make auth-1` | Authenticated game open smoke | `GET /profile`, `GET /aircraft`, `GET /quests`, `GET /collections/me`, `GET /raffles/me`, `GET /wheel/rewards`, `GET /carousel` | No | HTTP errors 0%, checks 100%, p95 below 1000 ms |
 | `make auth 5` | Authenticated game open small load | `GET /profile`, `GET /aircraft`, `GET /quests`, `GET /collections/me`, `GET /raffles/me`, `GET /wheel/rewards`, `GET /carousel` | No | HTTP errors below 1%, checks above 99%, no 401/403 |
 | `make auth 50` | Authenticated game open base load | `GET /profile`, `GET /aircraft`, `GET /quests`, `GET /collections/me`, `GET /raffles/me`, `GET /wheel/rewards`, `GET /carousel` | No | HTTP errors below 1%, p95 below 1000 ms, p99 below 2000 ms |
+| `make profile CUSTOM_LOAD_PROFILE_FILE=...` | Custom method load profile | Methods selected in the local load profile builder | Depends on selected methods | HTTP errors below 1%, checks above 99%, no unexpected 401/403/429/5xx |
 | `make flight-once` | Critical flight flow | `POST /flights/start`, `POST /flights/{flightId}/complete`, `GET /profile` before and after | Yes | Flight starts, completes, returns reward, profile stays consistent |
 | `make browser` | Mobile browser smoke | Frontend page, session cookie injection, mobile viewport, simple takeoff tap | Can change state if flight starts | Game opens, canvas appears, screenshots are saved |
 

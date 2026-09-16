@@ -30,6 +30,16 @@ The same local UI also has a Swagger/OpenAPI route builder:
 
 Saved routes are written to `load-testing/routes/local/` and are ignored by git.
 
+The UI also includes a load profile builder for method-level pressure:
+
+1. Upload Swagger/OpenAPI once.
+2. Search methods in the lower shelf.
+3. Drag methods into the load chart or click a method card.
+4. Set VUs on each method card.
+5. Save the profile locally and run `load profile` from the UI.
+
+Saved load profiles are written to `load-testing/load-profiles/local/` and are ignored by git.
+
 ## Useful Commands
 
 ```bash
@@ -40,6 +50,7 @@ make public 50
 make auth 5
 make auth-1
 make auth-dashboard
+make profile CUSTOM_LOAD_PROFILE_FILE=load-testing/load-profiles/local/name.load.json
 ```
 
 All load-test commands create a local HTML report in `load-testing/k6/results`

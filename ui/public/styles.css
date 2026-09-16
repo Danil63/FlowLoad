@@ -175,6 +175,10 @@ button:disabled {
   white-space: nowrap;
 }
 
+.hidden {
+  display: none !important;
+}
+
 .fileButton {
   display: inline-flex;
   align-items: center;
@@ -579,9 +583,9 @@ pre {
 }
 
 .savedRoute {
-  display: flex;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
-  justify-content: space-between;
   gap: 12px;
   border-top: 1px solid var(--line);
   padding-top: 8px;
@@ -595,6 +599,170 @@ pre {
 .savedRoute span {
   color: var(--muted);
   white-space: nowrap;
+}
+
+.savedRouteInfo {
+  display: grid;
+  min-width: 0;
+  gap: 2px;
+}
+
+.savedRouteInfo strong {
+  overflow-wrap: anywhere;
+}
+
+.savedRouteActions {
+  display: flex;
+  gap: 8px;
+}
+
+.savedRouteActions button {
+  height: 32px;
+}
+
+.loadBuilder {
+  margin-bottom: 16px;
+}
+
+.loadBoard {
+  display: grid;
+  gap: 14px;
+  min-width: 0;
+  margin-top: 16px;
+}
+
+.loadChart {
+  min-width: 0;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background:
+    linear-gradient(180deg, rgba(29, 78, 216, 0.05) 0 1px, transparent 1px 64px),
+    #fbfcff;
+  background-size: 100% 64px;
+  padding: 14px;
+  transition: background 160ms ease, border-color 160ms ease, box-shadow 160ms ease;
+}
+
+.loadChart.dragOver {
+  border-color: var(--accent);
+  background:
+    linear-gradient(180deg, rgba(29, 78, 216, 0.1) 0 1px, transparent 1px 64px),
+    var(--accent-soft);
+  box-shadow: inset 0 0 0 1px var(--accent);
+}
+
+.loadTargetsList {
+  position: relative;
+  display: grid;
+  grid-template-columns: repeat(var(--load-count, 1), minmax(190px, 1fr));
+  gap: 12px;
+  max-width: 100%;
+  min-height: 310px;
+  margin-top: 16px;
+  overflow-x: auto;
+  overflow-y: hidden;
+  padding: 14px 2px 8px;
+}
+
+.loadTargetsList::before {
+  content: "";
+  position: absolute;
+  left: 18px;
+  right: 18px;
+  top: 70px;
+  height: 2px;
+  background: linear-gradient(90deg, transparent, rgba(29, 78, 216, 0.3), transparent);
+  pointer-events: none;
+}
+
+.loadTargetsList.empty {
+  display: grid;
+  min-height: 220px;
+  place-items: center;
+  border: 1px dashed var(--line);
+  border-radius: 8px;
+  color: var(--muted);
+  text-align: center;
+}
+
+.loadTargetsList.empty::before {
+  display: none;
+}
+
+.loadTarget {
+  display: grid;
+  grid-template-rows: 150px auto;
+  min-width: 0;
+}
+
+.loadPoint {
+  position: relative;
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  min-height: 150px;
+}
+
+.loadPointLine {
+  width: 2px;
+  height: var(--point-height);
+  border-radius: 999px;
+  background: linear-gradient(180deg, var(--accent), rgba(29, 78, 216, 0.12));
+}
+
+.loadPointDot {
+  position: absolute;
+  bottom: calc(var(--point-height) - 7px);
+  width: 16px;
+  height: 16px;
+  border: 3px solid #ffffff;
+  border-radius: 50%;
+  background: var(--accent);
+  box-shadow: 0 0 0 2px rgba(29, 78, 216, 0.25), 0 10px 20px rgba(29, 78, 216, 0.22);
+  z-index: 1;
+}
+
+.loadTargetCard {
+  display: grid;
+  min-width: 0;
+  gap: 8px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #ffffff;
+  padding: 12px;
+  box-shadow: 0 10px 24px rgba(20, 25, 34, 0.06);
+}
+
+.loadTargetTop {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.loadTargetCard strong {
+  overflow-wrap: anywhere;
+}
+
+.loadTargetCard p {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.loadTargetCard label {
+  margin: 4px 0 0;
+}
+
+.loadWeightInput {
+  height: 36px;
+  margin-top: 6px;
+}
+
+.loadPercent {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 700;
 }
 
 @media (max-width: 760px) {
@@ -611,7 +779,8 @@ pre {
   .reportLink,
   .savedRoute {
     align-items: stretch;
-    flex-direction: column;
+    display: grid;
+    grid-template-columns: 1fr;
   }
 
   button,
@@ -638,11 +807,19 @@ pre {
   }
 
   .methodList,
-  .routeSteps {
+  .routeSteps,
+  .loadTargetsList {
     grid-auto-columns: minmax(230px, 86vw);
+    grid-template-columns: none;
+    grid-auto-flow: column;
   }
 
   .savedRoute span {
     white-space: normal;
+  }
+
+  .savedRouteActions {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
   }
 }
