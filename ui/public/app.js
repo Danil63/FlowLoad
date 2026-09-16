@@ -32,8 +32,6 @@ const savedRoutesList = document.querySelector('#savedRoutesList');
 const loadProfileState = document.querySelector('#loadProfileState');
 const loadMethodSearchInput = document.querySelector('#loadMethodSearchInput');
 const loadProfileNameInput = document.querySelector('#loadProfileNameInput');
-const loadMethodList = document.querySelector('#loadMethodList');
-const loadMethodCount = document.querySelector('#loadMethodCount');
 const loadChart = document.querySelector('.loadChart');
 const loadTargetsList = document.querySelector('#loadTargetsList');
 const saveLoadProfileButton = document.querySelector('#saveLoadProfileButton');
@@ -47,6 +45,7 @@ let route = [];
 let savedRoutes = [];
 let loadProfileTargets = [];
 let savedLoadProfiles = [];
+let expandedLoadTargetKey = null;
 
 const workspaceStorageKey = 'bigJourneyK6RouteBuilder';
 const loadProfileStorageKey = 'bigJourneyK6LoadProfileBuilder';
@@ -57,7 +56,7 @@ const loadOverflowSliderValue = 1100;
 const loadGraphHeight = 220;
 const loadGraphTopPad = 18;
 const loadGraphBottomPad = 22;
-const loadColumnWidth = 154;
+const loadColumnWidth = 126;
 
 async function requestJson(url, options = {}) {
   const response = await fetch(url, {
@@ -362,39 +361,25 @@ function loadProfileTotal() {
   return loadProfileTargets.reduce((sum, target) => sum + Number(target.weight || 0), 0);
 }
 
+function matchesLoadQuery(target) {
+  const query = loadMethodSearchInput.value.trim().toLowerCase();
+  if (!query) return true;
+
+  const haystack = [
+    target.method,
+    target.path,
+    target.summary,
+    target.operationId,
+    target.tags.join(' '),
+    target.risk,
+  ]
+    .join(' ')
+    .toLowerCase();
+
+  return haystack.includes(query);
+}
+
 function renderLoadMethods() {
-  const visibleEndpoints = filteredLoadEndpoints();
-  loadMethodCount.textContent = `${visibleEndpoints.length} из ${endpoints.length} методов`;
-
-  if (!endpoints.length) {
-    loadMethodList.innerHTML = '<p class="muted">Пока нет загруженных методов.</p>';
-    renderLoadTargets();
-    return;
-  }
-
-  if (!visibleEndpoints.length) {
-    loadMethodList.innerHTML = '<p class="muted">Ничего не найдено. Попробуй другой запрос.</p>';
-    renderLoadTargets();
-    return;
-  }
-
-  loadMethodList.innerHTML = visibleEndpoints
-    .map((endpoint) => {
-      const summary = endpoint.summary ? `<p>${escapeHtml(endpoint.summary)}</p>` : '';
-      const auth = endpoint.authRequired ? '<span class="metaPill">auth</span>' : '<span class="metaPill">public</span>';
-
-      return `<button class="methodCard" type="button" draggable="true" data-load-endpoint-id="${escapeHtml(endpoint.id)}">
-        <span class="methodCardTop">
-          <span class="${methodClass(endpoint.method)}">${escapeHtml(endpoint.method)}</span>
-          <span class="risk risk-${escapeHtml(endpoint.risk)}">${escapeHtml(riskLabel(endpoint.risk))}</span>
-        </span>
-        <strong>${escapeHtml(endpoint.path)}</strong>
-        ${summary}
-        <span class="methodMeta">${auth}<span class="metaPill">${escapeHtml(endpoint.tags[0] || 'api')}</span></span>
-      </button>`;
-    })
-    .join('');
-
   renderLoadTargets();
 }
 
@@ -410,7 +395,17 @@ function renderLoadTargets() {
   }
 
   loadTargetsList.className = 'loadTargetsList';
-  const graphWidth = Math.max(loadColumnWidth * loadProfileTargets.length, 1);
+  const visibleTargets = loadProfileTargets
+    .map((target, originalIndex) => ({ target, originalIndex }))
+    .filter(({ target }) => matchesLoadQuery(target));
+
+  if (!visibleTargets.length) {
+    loadTargetsList.className = 'loadTargetsList empty';
+    loadTargetsList.textContent = 'По этому поиску методов не найдено.';
+    return;
+  }
+
+  const graphWidth = Math.max(loadColumnWidth * visibleTargets.length, 1);
   const gridLines = [1000, 750, 500, 250, 10];
   const yForWeight = (weight) => {
     const clampedWeight = Math.max(loadScaleMin, Math.min(loadScaleMax, Number(weight || loadScaleMin)));
@@ -418,8 +413,8 @@ function renderLoadTargets() {
     const ratio = (clampedWeight - loadScaleMin) / (loadScaleMax - loadScaleMin);
     return Math.round(loadGraphTopPad + (1 - ratio) * activeHeight);
   };
-  const points = loadProfileTargets
-    .map((target, index) => {
+  const points = visibleTargets
+    .map(({ target }, index) => {
       const x = Math.round(index * loadColumnWidth + loadColumnWidth / 2);
       return `${x},${yForWeight(target.weight)}`;
     })
@@ -430,30 +425,43 @@ function renderLoadTargets() {
   const grid = gridLines
     .map((value) => `<line x1="0" y1="${yForWeight(value)}" x2="${graphWidth}" y2="${yForWeight(value)}"></line>`)
     .join('');
-  const targetCards = loadProfileTargets
-    .map((target, index) => {
+  const targetCards = visibleTargets
+    .map(({ target, originalIndex }) => {
       const weight = Number(target.weight || defaultMethodVus);
       const percent = total > 0 ? Math.round((weight / total) * 100) : 0;
       const sliderValue = weight > loadScaleMax ? loadOverflowSliderValue : Math.max(loadScaleMin, weight);
-      const customClass = weight > loadScaleMax ? '' : ' hidden';
+      const isExpanded = expandedLoadTargetKey === targetKey(target);
+      const expandedClass = isExpanded ? ' expanded' : '';
+      const summary =
+        target.summary && target.summary !== target.operationId
+          ? `<span class="loadSummary">${escapeHtml(target.summary)}</span>`
+          : '';
+      const auth = target.authRequired ? 'auth' : 'public';
 
-      return `<div class="loadTarget" data-load-target-index="${index}" style="--point-top: ${yForWeight(weight)}px">
+      return `<div class="loadTarget${expandedClass}" data-load-target-index="${originalIndex}" style="--point-top: ${yForWeight(weight)}px">
         <div class="loadPoint">
           <span class="loadPointValue">${weight}</span>
           <span class="loadPointDot" title="${weight} VUs"></span>
-          <input class="loadRange" type="range" min="${loadScaleMin}" max="${loadOverflowSliderValue}" step="10" value="${sliderValue}" data-load-range-index="${index}" aria-label="VUs для ${escapeHtml(target.method)} ${escapeHtml(target.path)}">
+          <input class="loadRange" type="range" min="${loadScaleMin}" max="${loadOverflowSliderValue}" step="10" value="${sliderValue}" data-load-range-index="${originalIndex}" aria-label="VUs для ${escapeHtml(target.method)} ${escapeHtml(target.path)}">
         </div>
-        <div class="loadTargetCard">
+        <div class="loadTargetCard" role="button" tabindex="0" data-load-card-index="${originalIndex}" aria-expanded="${isExpanded}">
           <div class="loadTargetTop">
             <span class="${methodClass(target.method)}">${escapeHtml(target.method)}</span>
-            <span class="loadPercent">${percent}%</span>
           </div>
           <strong>${escapeHtml(target.path)}</strong>
-          <span class="loadOperation">${escapeHtml(target.operationId || target.summary || target.tags[0] || 'api')}</span>
-          <label class="customVus${customClass}">
-            свой VUs
-            <input class="loadWeightInput" type="number" min="1001" max="100000" value="${Math.max(weight, 1001)}" data-load-weight-index="${index}">
-          </label>
+          <div class="loadDetails">
+            ${summary}
+            <span class="loadOperation">${escapeHtml(target.operationId || target.tags[0] || 'api')}</span>
+            <span class="loadMetaLine">
+              <span>${escapeHtml(auth)}</span>
+              <span>${escapeHtml(riskLabel(target.risk))}</span>
+              <span>${percent}% профиля</span>
+            </span>
+            <label class="loadManualControl">
+              VUs на метод
+              <input class="loadWeightInput" type="number" min="${loadScaleMin}" max="100000" value="${weight}" data-load-weight-index="${originalIndex}">
+            </label>
+          </div>
         </div>
       </div>`;
     })
@@ -461,7 +469,7 @@ function renderLoadTargets() {
 
   loadTargetsList.innerHTML = `<div class="loadAxis">${axis}</div>
     <div class="loadGraphScroller">
-      <div class="loadGraphInner" style="width:${graphWidth}px; --load-count:${loadProfileTargets.length}; --load-column-width:${loadColumnWidth}px">
+      <div class="loadGraphInner" style="width:${graphWidth}px; --load-count:${visibleTargets.length}; --load-column-width:${loadColumnWidth}px">
         <svg class="loadTrend" viewBox="0 0 ${graphWidth} ${loadGraphHeight}" preserveAspectRatio="none" aria-hidden="true">
           <g class="loadGrid">${grid}</g>
           <polyline points="${points}"></polyline>
@@ -918,24 +926,6 @@ methodList.addEventListener('dragstart', (event) => {
 
 methodList.addEventListener('dragend', clearDragState);
 
-loadMethodList.addEventListener('click', (event) => {
-  const card = event.target.closest('[data-load-endpoint-id]');
-  if (!card) return;
-
-  addEndpointToLoadProfile(selectedEndpoint(card.dataset.loadEndpointId));
-});
-
-loadMethodList.addEventListener('dragstart', (event) => {
-  const card = event.target.closest('[data-load-endpoint-id]');
-  if (!card) return;
-
-  event.dataTransfer.effectAllowed = 'copy';
-  event.dataTransfer.setData('application/x-load-endpoint-id', card.dataset.loadEndpointId);
-  card.classList.add('dragging');
-});
-
-loadMethodList.addEventListener('dragend', clearDragState);
-
 addSelectedButton.addEventListener('click', () => {
   addEndpointToRoute(selectedEndpoint(selectedEndpointIds[0]));
   selectedEndpointIds = [];
@@ -948,34 +938,6 @@ connectButton.addEventListener('click', () => {
   selectedEndpointIds = [];
   renderMethods();
   renderRoute();
-});
-
-loadChart.addEventListener('dragover', (event) => {
-  const types = Array.from(event.dataTransfer.types);
-  if (!types.includes('application/x-load-endpoint-id')) {
-    return;
-  }
-
-  event.preventDefault();
-  loadChart.classList.add('dragOver');
-  event.dataTransfer.dropEffect = 'copy';
-});
-
-loadChart.addEventListener('dragleave', (event) => {
-  if (!loadChart.contains(event.relatedTarget)) {
-    loadChart.classList.remove('dragOver');
-  }
-});
-
-loadChart.addEventListener('drop', (event) => {
-  event.preventDefault();
-  const endpointId = event.dataTransfer.getData('application/x-load-endpoint-id');
-
-  if (endpointId) {
-    addEndpointToLoadProfile(selectedEndpoint(endpointId));
-  }
-
-  clearDragState();
 });
 
 routeCanvas.addEventListener('dragover', (event) => {
@@ -1064,19 +1026,51 @@ loadTargetsList.addEventListener('change', (event) => {
   if (!input) return;
 
   const index = Number(input.dataset.loadWeightIndex);
-  const value = Math.max(loadScaleMax + 1, Math.min(100000, Number(input.value || loadScaleMax + 1)));
+  const value = Math.max(loadScaleMin, Math.min(100000, Number(input.value || defaultMethodVus)));
   loadProfileTargets[index].weight = value;
   saveLoadProfileWorkspace();
   renderLoadTargets();
 });
 
 loadTargetsList.addEventListener('click', (event) => {
-  const button = event.target.closest('[data-load-action]');
-  if (!button) return;
+  if (event.target.closest('input, label')) return;
 
-  const index = Number(button.dataset.index);
-  if (button.dataset.loadAction === 'remove') {
-    loadProfileTargets.splice(index, 1);
+  const card = event.target.closest('[data-load-card-index]');
+  if (!card) return;
+
+  const index = Number(card.dataset.loadCardIndex);
+  const key = targetKey(loadProfileTargets[index]);
+  expandedLoadTargetKey = expandedLoadTargetKey === key ? null : key;
+  renderLoadTargets();
+});
+
+loadTargetsList.addEventListener('keydown', (event) => {
+  const input = event.target.closest('[data-load-weight-index]');
+  if (input && event.key === 'Enter') {
+    input.blur();
+    return;
+  }
+
+  if (!['Enter', ' '].includes(event.key) || event.target.closest('input')) return;
+
+  const card = event.target.closest('[data-load-card-index]');
+  if (!card) return;
+
+  event.preventDefault();
+  const index = Number(card.dataset.loadCardIndex);
+  const key = targetKey(loadProfileTargets[index]);
+  expandedLoadTargetKey = expandedLoadTargetKey === key ? null : key;
+  renderLoadTargets();
+});
+
+loadTargetsList.addEventListener('focusout', (event) => {
+  const input = event.target.closest('[data-load-weight-index]');
+  if (!input) return;
+
+  const index = Number(input.dataset.loadWeightIndex);
+  const value = Math.max(loadScaleMin, Math.min(100000, Number(input.value || defaultMethodVus)));
+  if (loadProfileTargets[index].weight !== value) {
+    loadProfileTargets[index].weight = value;
     saveLoadProfileWorkspace();
     renderLoadTargets();
   }
@@ -1094,6 +1088,7 @@ routeNameInput.addEventListener('input', saveWorkspace);
 loadProfileNameInput.addEventListener('input', saveLoadProfileWorkspace);
 
 clearLoadProfileButton.addEventListener('click', () => {
+  expandedLoadTargetKey = null;
   selectAllLoadTargets();
   saveLoadProfileWorkspace();
   renderLoadTargets();
