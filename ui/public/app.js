@@ -57,8 +57,13 @@ const loadGraphHeight = 220;
 const loadGraphTopPad = 18;
 const loadGraphBottomPad = 22;
 const loadColumnWidth = 126;
+const isFileMode = window.location.protocol === 'file:';
 
 async function requestJson(url, options = {}) {
+  if (isFileMode) {
+    throw new Error('Интерфейс открыт как файл. Запусти make ui и открой http://127.0.0.1:8790/');
+  }
+
   const response = await fetch(url, {
     headers: { 'Content-Type': 'application/json' },
     ...options,
@@ -1135,6 +1140,13 @@ if (endpoints.length) {
 renderMethods();
 renderRoute();
 renderLoadMethods();
-refresh().catch((error) => {
-  statusText.textContent = error.message;
-});
+if (isFileMode) {
+  statusText.textContent = 'Открыто как файл. Запусти make ui и открой http://127.0.0.1:8790/';
+  tokenState.textContent = 'Локальный web-интерфейс работает только через сервер.';
+  runOutput.textContent = 'Закрой эту вкладку file:// и запусти: make ui';
+  runButton.disabled = true;
+} else {
+  refresh().catch((error) => {
+    statusText.textContent = error.message;
+  });
+}
