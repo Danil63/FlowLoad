@@ -1,6 +1,6 @@
 .DEFAULT_GOAL := help
 
-.PHONY: help start setup token init ui check ping public public-report public-10 public-50 public-100 public-300 auth auth-report auth-dashboard auth-status auth-debug auth-1 auth-5 auth-50 auth-100 route profile flight-once browser browser-dashboard grafana-check public-grafana auth-grafana dist dist-public dist-auth dist-flight k6-check k6-public k6-public-report k6-auth k6-auth-dashboard k6-auth-report k6-auth-status k6-custom-route-report k6-load-profile-report k6-flight-once k6-browser-flight-smoke k6-browser-flight-dashboard k6-grafana k6-distributed
+.PHONY: help start setup token init ui web check ping public public-report public-10 public-50 public-100 public-300 auth auth-report auth-dashboard auth-status auth-debug auth-1 auth-5 auth-50 auth-100 route profile flight-once browser browser-dashboard grafana-check public-grafana auth-grafana dist dist-public dist-auth dist-flight k6-check k6-public k6-public-report k6-auth k6-auth-dashboard k6-auth-report k6-auth-status k6-custom-route-report k6-load-profile-report k6-flight-once k6-browser-flight-smoke k6-browser-flight-dashboard k6-grafana k6-distributed
 
 K6_DIR := load-testing/k6
 K6_SCENARIOS := $(K6_DIR)/scenarios
@@ -65,7 +65,8 @@ help:
 	@echo "  make setup            Install k6/Node.js on macOS and prepare local files"
 	@echo "  make token            Replace local session token safely"
 	@echo "  make init             Prepare local .env and tokens.txt"
-	@echo "  make ui               Open local web UI"
+	@echo "  make web              Open local web UI"
+	@echo "  make ui               Same as make web"
 	@echo "  make check            Check k6 installation"
 	@echo "  make ping             Check API host and /health response"
 	@echo "  make public 200       Public read-only with 200 VUs, Russian report"
@@ -123,6 +124,8 @@ token:
 
 ui:
 	@PORT="$(UI_PORT)" node ui/server.mjs
+
+web: ui
 
 init:
 	@test -f $(K6_ENV) || cp $(K6_DIR)/.env.example $(K6_ENV)
