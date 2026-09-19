@@ -1,4 +1,4 @@
-# big-journey-k6-load-tests
+# FlowLoad
 
 k6 load-testing project for the Big Journey web game.
 
