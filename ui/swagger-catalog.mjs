@@ -1,32 +1,46 @@
-import { promises as fs } from 'node:fs';
-import path from 'node:path';
 import { randomUUID } from 'node:crypto';
+import { catalogValidator } from './public/catalog-state.js';
+import { RecoverableJson } from './recoverable-json.mjs';
 
 const key = item => `${String(item.method).toUpperCase()} ${item.path}`;
-export class SwaggerCatalog {
-  constructor(file) { this.file = file; this.pending = Promise.resolve(); }
-  async read() {
-    try { return JSON.parse(await fs.readFile(this.file, 'utf8')); }
-    catch (error) {
-      if (error.code !== 'ENOENT') throw error;
-      return { initialized: false, sources: [], deleted: [] };
+const text = value => typeof value === 'string' && value.length > 0;
+function validateCatalog(state) {
+  if (!state || typeof state.initialized !== 'boolean' || !Array.isArray(state.sources) || !Array.isArray(state.deleted)
+      || (!state.initialized && (state.sources.length || state.deleted.length))) throw new Error('Invalid catalog');
+  const sources = new Set(), methods = new Set();
+  for (const source of state.sources) {
+    if (!source || !text(source.id) || sources.has(source.id) || typeof source.name !== 'string' || !Array.isArray(source.endpoints)) {
+      throw new Error('Invalid catalog source');
+    }
+    sources.add(source.id);
+    for (const method of source.endpoints) {
+      if (!method || !text(method.catalogMethodId) || methods.has(method.catalogMethodId) || method.sourceId !== source.id
+          || !text(method.method) || !text(method.path)) throw new Error('Invalid catalog method');
+      methods.add(method.catalogMethodId);
     }
   }
+  for (const deleted of state.deleted) {
+    if (!deleted || !text(deleted.sourceId) || !text(deleted.catalogMethodId) || !text(deleted.key)
+        || methods.has(deleted.catalogMethodId)) throw new Error('Invalid catalog tombstone');
+    methods.add(deleted.catalogMethodId);
+  }
+}
+
+export class SwaggerCatalog {
+  constructor(file, scope = 'catalog') {
+    this.file = file;
+    this.storage = new RecoverableJson(file, { initial: { initialized: false, sources: [], deleted: [] },
+      validate: validateCatalog, label: 'Каталог Swagger', scope });
+  }
+  read() { return this.storage.read(); }
   update(change) {
-    const task = this.pending.then(async () => {
-      const state = await this.read();
+    return this.storage.update(async state => {
       await change(state);
       state.initialized = true;
-      await fs.mkdir(path.dirname(this.file), { recursive: true });
-      await fs.writeFile(`${this.file}.tmp`, JSON.stringify(state), { mode: 0o600 });
-      await fs.rename(`${this.file}.tmp`, this.file);
-      return state;
     });
-    this.pending = task.catch(() => {});
-    return task;
   }
   add(name, endpoints, migrate = false) {
-    if (!Array.isArray(endpoints) || !endpoints.length || endpoints.some(e => !e.method || !e.path)) {
+    if (!Array.isArray(endpoints) || !endpoints.length || endpoints.some(e => !e || !text(e.method) || !text(e.path))) {
       throw new Error('Документ не содержит корректных методов.');
     }
     return this.update(state => {
@@ -47,9 +61,10 @@ export class SwaggerCatalog {
       else state.sources = state.sources.filter(s => s.id !== sourceId);
     });
   }
+  async validator() {
+    return catalogValidator(await this.read());
+  }
   async invalid(items = []) {
-    const state = await this.read();
-    return items.some(item => state.deleted.some(d => item.catalogMethodId
-      ? d.catalogMethodId === item.catalogMethodId : d.key === key(item)));
+    return items.some(await this.validator());
   }
 }

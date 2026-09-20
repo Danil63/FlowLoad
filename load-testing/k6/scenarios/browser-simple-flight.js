@@ -48,7 +48,7 @@ export const options = {
     browser_flight_observe_duration: ['p(95)<30000'],
   },
   tags: {
-    app: 'entreporgneur-big-journey',
+    app: 'flowload',
     environment: 'production',
     test_type: 'browser_simple_flight',
   },

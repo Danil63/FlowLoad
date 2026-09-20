@@ -1,4 +1,4 @@
-# k6 load testing for Entreporgneur Big Journey
+# FlowLoad: сценарии k6 для игрового API
 
 Base URL:
 

@@ -38,7 +38,7 @@ export const options = {
     'checks{scope:flight}': ['rate>0.98'],
   },
   tags: {
-    app: 'entreporgneur-big-journey',
+    app: 'flowload',
     environment: 'production',
     test_type: 'flight_critical',
     state_changing: 'true',

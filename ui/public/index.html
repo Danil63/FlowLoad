@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>k6 Load UI</title>
+  <title>FlowLoad</title>
   <link rel="stylesheet" href="./styles.css">
 </head>
 <body>
@@ -17,7 +17,8 @@
     <section class="topbar">
       <div>
         <h1 id="pageTitle" tabindex="-1">Окружение</h1>
-        <p id="statusText">Проверка окружения...</p>
+        <p id="statusText" role="status" aria-live="polite">Проверка окружения...</p>
+        <p id="draftStorageWarning" class="storageWarning" role="status" hidden>Черновик не сохранён в браузере: хранилище недоступно или заполнено. Сохраните сценарий или профиль кнопкой «Сохранить» перед уходом со страницы.</p>
       </div>
     </section>
 
@@ -26,7 +27,7 @@
         <div><span class="environmentEyebrow">Выбрано</span><h2 id="workspaceActiveName">Загрузка...</h2><span id="workspaceApi" class="muted"></span></div>
         <div class="workspaceActions">
           <button id="workspaceEdit" class="ghost" type="button" disabled>Настройки</button>
-          <button id="workspaceCreate" type="button">Создать окружение</button>
+          <button id="workspaceCreate" type="button" disabled>Создать окружение</button>
         </div>
       </div>
       <div class="environmentListHeading"><h2>Мои окружения</h2><span id="workspaceCount" class="muted"></span></div>
@@ -115,7 +116,7 @@
               <select id="builderRouteSelect" disabled><option value="">Нет сохранённых сценариев</option></select>
             </label>
             <div class="routeActions">
-              <button id="criticalRouteButton" type="button" title="Собрать путь открытия игры" hidden disabled>Критический путь</button>
+              <button id="criticalRouteButton" type="button" title="Собрать путь открытия игры" disabled>Критический путь</button>
               <button id="addSelectedButton" class="secondary" type="button" disabled>Добавить выбранный</button>
               <button id="connectButton" class="secondary" type="button" disabled>Соединить выбранные</button>
               <button id="clearRouteButton" class="ghost" type="button">Очистить</button>
@@ -203,7 +204,10 @@
         <label id="profileSelectLabel" class="hidden" for="profileSelect">Профиль нагрузки</label>
         <select id="profileSelect" class="hidden"></select>
 
-        <button id="runButton" type="submit">Запустить</button>
+        <div class="runActions">
+          <button id="runButton" type="submit">Запустить</button>
+          <button id="loadHelpButton" class="infoButton" type="button" aria-label="Как строится нагрузка" title="Как строится нагрузка" aria-haspopup="dialog" aria-controls="loadHelpDialog">i</button>
+        </div>
       </form>
     </section>
 
@@ -224,6 +228,46 @@
     </section>
   </main>
 
+  <dialog id="revisionDialog" class="tokenHelpDialog" aria-labelledby="revisionTitle" aria-describedby="revisionMessage">
+    <form id="revisionForm">
+      <h2 id="revisionTitle">Конфликт сохранения</h2>
+      <p id="revisionMessage"></p>
+      <label for="revisionCopyName">Название копии</label>
+      <input id="revisionCopyName" required autocomplete="off">
+      <p id="revisionError" role="status"></p>
+      <div class="revisionActions">
+        <button id="revisionCancel" class="ghost" type="button">Продолжить редактирование</button>
+        <button id="revisionCopy" type="submit">Сохранить копию</button>
+      </div>
+    </form>
+  </dialog>
+  <dialog id="loadHelpDialog" class="tokenHelpDialog loadHelpDialog" aria-labelledby="loadHelpTitle">
+    <div class="tokenHelpHeader">
+      <h2 id="loadHelpTitle">Как строится нагрузка</h2>
+      <button id="loadHelpClose" class="dialogClose" type="button" aria-label="Закрыть" title="Закрыть" autofocus>×</button>
+    </div>
+    <p>k6 запускается на вашем компьютере и отправляет HTTP-запросы к API выбранного окружения. Браузеры для этих тестов не открываются.</p>
+    <h3>Виртуальные пользователи</h3>
+    <p><strong>VU</strong> — независимый исполнитель сценария, а не отдельный аккаунт. 100 VUs не означают 100 запросов в секунду: скорость зависит от времени ответа API, числа запросов и пауз. При нехватке токенов одна сессия используется несколькими VUs.</p>
+    <figure class="loadHelpFigure">
+      <svg viewBox="0 0 600 210" role="img" aria-labelledby="loadDiagramTitle loadDiagramDesc">
+        <title id="loadDiagramTitle">Число пользователей во времени</title>
+        <desc id="loadDiagramDesc">Плавный разгон до целевого числа пользователей, удержание нагрузки, затем снижение до нуля.</desc>
+        <path d="M55 40V165H570" fill="none" stroke="#98a2b3"/>
+        <path d="M55 65H555" fill="none" stroke="#d8dee8" stroke-dasharray="4 5"/>
+        <path d="M55 165L180 65H440L555 165" fill="none" stroke="#1d4ed8" stroke-width="3" stroke-linejoin="round"/>
+        <g fill="#667085" font-size="13" font-family="sans-serif"><text x="10" y="24">VUs</text><text x="22" y="70">N</text><text x="25" y="170">0</text><text x="535" y="198">Время</text><text x="82" y="192">Разгон</text><text x="272" y="192">Удержание</text><text x="472" y="145">Спад</text></g>
+      </svg>
+      <figcaption>N — целевое количество VUs. По умолчанию при запуске через Makefile: 1 мин разгона, 3 мин удержания и 30 с снижения. Настройки RAMP_UP, HOLD и RAMP_DOWN могут изменить эти интервалы. Завершение текущих итераций может занять дополнительное время.</figcaption>
+    </figure>
+    <div class="loadHelpModes">
+      <section><h3>Сценарий</h3><p>Каждый VU проходит выбранные методы по порядку, затем делает паузу и повторяет цепочку.</p><p class="loadHelpFlow">Метод 1 → Метод 2 → Метод 3 → Пауза → Повтор</p></section>
+      <section><h3>Профиль нагрузки</h3><p>Методы выполняются параллельно отдельными группами VUs. Значения на графике складываются: 20 VUs на один метод и 30 на другой дают целевой максимум 50 VUs. Это не последовательный пользовательский путь.</p></section>
+    </div>
+    <p>Пауза между итерациями по умолчанию — 1 секунда (THINK_TIME_SECONDS). Чем дольше ответы, тем меньше итераций успевает выполнить каждый VU.</p>
+    <p><strong>Перед запуском:</strong> проверьте адрес окружения, токены и суммарное число VUs. Изменяющие данные методы требуют отдельного разрешения; без него они пропускаются. Начинайте с небольшой нагрузки, особенно в production.</p>
+    <a href="https://grafana.com/docs/k6/latest/using-k6/scenarios/concepts/open-vs-closed/" target="_blank" rel="noopener noreferrer">Подробнее в документации k6</a>
+  </dialog>
   <dialog id="workspaceDialog" class="tokenHelpDialog" aria-labelledby="workspaceDialogTitle">
     <form id="workspaceForm">
       <h2 id="workspaceDialogTitle">Новый проект</h2>

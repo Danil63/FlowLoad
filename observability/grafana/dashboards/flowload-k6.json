@@ -200,7 +200,7 @@
       },
       "targets": [
         {
-          "expr": "{job=\"k6\", project=\"big-journey\", testid=~\"$testid\"}",
+          "expr": "{job=\"k6\", project=\"flowload\", testid=~\"$testid\"}",
           "refId": "A"
         }
       ],
@@ -213,7 +213,7 @@
   "tags": [
     "k6",
     "load-testing",
-    "big-journey"
+    "flowload"
   ],
   "templating": {
     "list": [
@@ -252,8 +252,8 @@
   },
   "timepicker": {},
   "timezone": "browser",
-  "title": "Big Journey k6",
-  "uid": "big-journey-k6",
+  "title": "FlowLoad",
+  "uid": "flowload-k6",
   "version": 1,
   "weekStart": ""
 }

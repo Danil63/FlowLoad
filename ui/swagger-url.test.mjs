@@ -75,6 +75,24 @@ test('reports HTML, HTTP errors and both declared and streamed size limits', asy
   }
 });
 
+test('resolves Swagger UI docs pages to docs-json, including nested paths', async t => {
+  const content = '{"openapi":"3.0.0","paths":{}}';
+  const calls = remote(t, [
+    { content: '<html><div id="swagger-ui"></div></html>', headers: { 'content-type': 'text/html' } },
+    { content },
+  ]);
+  assert.equal((await downloadSwagger('https://public.test/api/docs/')).content, content);
+  assert.equal(calls[1].url, 'https://public.test/api/docs-json');
+});
+
+test('docs-json discovery preserves private redirect protection', async t => {
+  remote(t, [
+    { content: '<html>swagger-ui</html>' },
+    { status: 302, headers: { location: 'http://private.test/spec' } },
+  ]);
+  await assert.rejects(downloadSwagger('https://public.test/docs'), /непубличный/);
+});
+
 test('bounds redirect loops', async t => {
   const calls = remote(t, Array.from({ length: 6 }, () => ({ status: 302, headers: { location: '/again' } })));
   await assert.rejects(downloadSwagger('https://public.test/spec'), /перенаправлений/);

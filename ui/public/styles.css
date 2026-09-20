@@ -20,6 +20,19 @@
   --violet: #5b35b1;
 }
 
+.runActions { display: flex; align-items: center; gap: 12px; margin-top: 16px; }
+.runActions #runButton { flex: 1; margin: 0; }
+.runActions .infoButton { flex: 0 0 28px; width: 28px; height: 28px; margin: 0; }
+.tokenHelpDialog.loadHelpDialog { width: min(760px, calc(100vw - 32px)); }
+.loadHelpDialog h3 { font-size: 15px; margin: 20px 0 8px; }
+.loadHelpDialog p { margin: 10px 0; overflow-wrap: anywhere; }
+.loadHelpFigure { margin: 20px 0; padding: 12px 0; border-block: 1px solid var(--line); }
+.loadHelpFigure svg { display: block; width: 100%; height: auto; }
+.loadHelpFigure figcaption { color: var(--muted); font-size: 12px; overflow-wrap: anywhere; }
+.loadHelpModes { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 24px; }
+.loadHelpFlow { color: var(--accent); }
+@media (max-width: 600px) { .loadHelpModes { grid-template-columns: 1fr; gap: 0; } }
+
 * {
   box-sizing: border-box;
 }
@@ -103,7 +116,7 @@ body {
 .tokenImport button { justify-self: start; }
 .tokenImportHeading, .tokenHelpHeader { display: flex; align-items: center; gap: 12px; }
 .tokenImportHeading label { margin: 0; }
-.tokenImportHeading .infoButton {
+.tokenImportHeading .infoButton, .runActions .infoButton {
   display: grid; place-items: center; flex: 0 0 26px;
   width: 26px; height: 26px; padding: 0;
   border: 1px solid #d1d5db; border-radius: 50%;
@@ -1449,3 +1462,12 @@ pre {
    .workspaceActions { flex-wrap: wrap; }
    .workspaceActions select { flex-basis: 100%; width: 100%; }
  }
+#draftStorageWarning {
+  color: #a32828;
+  overflow-wrap: anywhere;
+}
+.revisionActions { display: flex; justify-content: flex-end; flex-wrap: wrap; gap: 10px; margin-top: 20px; }
+.revisionActions button { white-space: normal; min-height: 42px; height: auto; }
+#revisionMessage { margin: 16px 0; }
+#revisionError { color: #b42318; margin-top: 12px; overflow-wrap: anywhere; }
+#revisionCopyName { width: 100%; min-width: 0; }

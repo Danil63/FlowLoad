@@ -7,6 +7,11 @@ import YAML from 'yaml';
 import { downloadSwagger } from './swagger-url.mjs';
 import { Workspaces } from './workspaces.mjs';
 import { AsyncLocalStorage } from 'node:async_hooks';
+import { writeAtomic } from './atomic-file.mjs';
+import { acquireServerLock } from './server-lock.mjs';
+import { listSavedDocuments, readSavedDocument, validateSavedDocument } from './saved-documents.mjs';
+import { pruneRunHistory } from './run-history.mjs';
+import { documentRevision, readDocumentSnapshot, requireDocumentRevision } from './document-revisions.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const rootDir = path.resolve(__dirname, '..');
@@ -21,6 +26,25 @@ let activeRunId = null;
 const lifecycleClients = new Set();
 let lifecycleClientSeen = false;
 let shutdownTimer = null;
+let shutdownRequested = false;
+let shutdownTask = null;
+setInterval(() => pruneRunHistory(runs), 60000).unref();
+
+function requestShutdown() {
+  shutdownRequested = true;
+  if (shutdownTask) return;
+  // Keep the project lock until queued writes and the running generator have finished.
+  shutdownTask = mutationQueue.then(() => {
+    if (activeRunId) {
+      console.log('FlowLoad: ожидаем завершения теста перед остановкой сервера.');
+      shutdownTask = null;
+      return;
+    }
+    for (const client of lifecycleClients) client.end();
+    server.close(() => process.exit(0));
+    server.closeIdleConnections?.();
+  });
+}
 
 const allowedRuns = {
   ping: { args: ['ping'], users: false },
@@ -39,6 +63,7 @@ function json(res, status, data) {
   const body = JSON.stringify(data);
   res.writeHead(status, {
     'Content-Type': 'application/json; charset=utf-8',
+    'Cache-Control': 'no-store',
     'Content-Length': Buffer.byteLength(body),
   });
   res.end(body);
@@ -56,6 +81,7 @@ function cancelScheduledShutdown() {
 
 function scheduleShutdownWhenUnused() {
   cancelScheduledShutdown();
+  if (shutdownRequested) { requestShutdown(); return; }
   if (!lifecycleClientSeen || lifecycleClients.size > 0) return;
 
   shutdownTimer = setTimeout(() => {
@@ -68,8 +94,7 @@ function scheduleShutdownWhenUnused() {
     }
 
     console.log('Browser closed. Stopping local UI.');
-    server.close(() => process.exit(0));
-    server.closeIdleConnections?.();
+    requestShutdown();
   }, 2000);
 }
 
@@ -221,72 +246,31 @@ function loadProfilePathForName(fileName) {
 
 async function readRouteFile(fileName) {
   const routePath = routePathForName(fileName);
-  const raw = await fs.readFile(routePath, 'utf8');
-  return JSON.parse(raw);
+  const { raw, revision } = await readDocumentSnapshot(routePath);
+  return { route: validateSavedDocument(JSON.parse(raw), 'route'), revision, fileName: path.basename(routePath) };
 }
 
 async function readLoadProfileFile(fileName) {
   const profilePath = loadProfilePathForName(fileName);
-  const raw = await fs.readFile(profilePath, 'utf8');
-  return JSON.parse(raw);
+  const { raw, revision } = await readDocumentSnapshot(profilePath);
+  return { profile: validateSavedDocument(JSON.parse(raw), 'profile'), revision, fileName: path.basename(profilePath) };
 }
 
 async function listRoutes() {
-  try {
-    const entries = await fs.readdir(workspace().routesDir, { withFileTypes: true });
-    const routes = [];
-
-    for (const entry of entries) {
-      if (!entry.isFile() || !entry.name.endsWith('.route.json')) continue;
-
-      const fullPath = path.join(workspace().routesDir, entry.name);
-      const [raw, stat] = await Promise.all([fs.readFile(fullPath, 'utf8'), fs.stat(fullPath)]);
-      const route = JSON.parse(raw);
-      routes.push({
-        name: route.name || entry.name.replace(/\.route\.json$/, ''),
-        fileName: entry.name,
-        stepsCount: Array.isArray(route.steps) ? route.steps.length : 0,
-        invalid: await workspace().swaggerCatalog.invalid(route.steps || []),
-        updatedAt: stat.mtimeMs,
-      });
-    }
-
-    routes.sort((a, b) => b.updatedAt - a.updatedAt);
-    return routes;
-  } catch (_error) {
-    return [];
-  }
+  const isInvalid = await workspace().swaggerCatalog.validator();
+  return listSavedDocuments(workspace().routesDir, '.route.json', route => {
+    validateSavedDocument(route, 'route');
+    return { name: route.name, stepsCount: route.steps.length, invalid: route.steps.some(isInvalid) };
+  });
 }
 
 async function listLoadProfiles() {
-  try {
-    const entries = await fs.readdir(workspace().loadProfilesDir, { withFileTypes: true });
-    const profiles = [];
-
-    for (const entry of entries) {
-      if (!entry.isFile() || !entry.name.endsWith('.load.json')) continue;
-
-      const fullPath = path.join(workspace().loadProfilesDir, entry.name);
-      const [raw, stat] = await Promise.all([fs.readFile(fullPath, 'utf8'), fs.stat(fullPath)]);
-      const profile = JSON.parse(raw);
-      const targets = Array.isArray(profile.targets) ? profile.targets : [];
-      const totalWeight = targets.reduce((sum, target) => sum + Number(target.weight || 0), 0);
-
-      profiles.push({
-        name: profile.name || entry.name.replace(/\.load\.json$/, ''),
-        fileName: entry.name,
-        targetsCount: targets.length,
-        invalid: await workspace().swaggerCatalog.invalid(targets),
-        totalWeight,
-        updatedAt: stat.mtimeMs,
-      });
-    }
-
-    profiles.sort((a, b) => b.updatedAt - a.updatedAt);
-    return profiles;
-  } catch (_error) {
-    return [];
-  }
+  const isInvalid = await workspace().swaggerCatalog.validator();
+  return listSavedDocuments(workspace().loadProfilesDir, '.load.json', profile => {
+    validateSavedDocument(profile, 'profile');
+    return { name: profile.name, targetsCount: profile.targets.length,
+      invalid: profile.targets.some(isInvalid), totalWeight: profile.targets.reduce((sum, target) => sum + Number(target.weight), 0) };
+  });
 }
 
 function parseTokens(raw) {
@@ -348,6 +332,13 @@ async function handleStatus(_req, res) {
   });
 }
 
+let mutationQueue = Promise.resolve();
+function queueMutation(action) {
+  const result = mutationQueue.then(action);
+  mutationQueue = result.catch(() => {});
+  return result;
+}
+
 async function saveToken(req, res) {
   if (activeRunId) {
     json(res, 409, { error: 'Дождитесь завершения проверки или нагрузки перед изменением токенов.' });
@@ -359,20 +350,29 @@ async function saveToken(req, res) {
     json(res, 400, { error: 'Ожидается текст до 1 МБ' });
     return;
   }
-  const tokens = parseTokens(raw);
+  let tokens = parseTokens(raw);
 
   if (!tokens.length || tokens.some(token => /[\s;\x00-\x1f\x7f]/.test(token))) {
     json(res, 400, { error: 'Укажи значения токенов: один на строку, без имени cookie и пробелов' });
     return;
   }
 
+  if (body.content == null) {
+    let existing = [];
+    try {
+      existing = parseTokens(await fs.readFile(workspace().tokensFile, 'utf8'));
+    } catch (error) {
+      if (error.code !== 'ENOENT') throw error;
+    }
+    tokens = [...new Set([...existing, ...tokens])];
+  }
   await fs.mkdir(workspace().k6Dir, { recursive: true });
   await fs.writeFile(workspace().tokensFile, `# Local session tokens. Do not commit this file.\n# One token per line.\n${tokens.join('\n')}\n`, {
     mode: 0o600,
   });
   await fs.chmod(workspace().tokensFile, 0o600).catch(() => {});
   for (const run of runs.values()) if (run.workspaceId === workspace().id && run.command === 'auth-status') run.tokenCheckStale = true;
-  json(res, 200, { ok: true });
+  json(res, 200, { ok: true, tokenCount: tokens.length, tokenReady: true });
 }
 
 async function deleteTokens(_req, res) {
@@ -459,7 +459,9 @@ async function saveRoute(req, res) {
   await fs.mkdir(workspace().routesDir, { recursive: true });
   const fileName = `${slugify(name)}.route.json`;
   const routePath = path.join(workspace().routesDir, fileName);
-  await fs.writeFile(routePath, `${JSON.stringify(route, null, 2)}\n`, { mode: 0o600 });
+  await requireDocumentRevision(routePath, body.baseRevision, { create: true });
+  const content = `${JSON.stringify(route, null, 2)}\n`;
+  await writeAtomic(routePath, content);
   await fs.chmod(routePath, 0o600).catch(() => {});
 
   json(res, 200, {
@@ -468,6 +470,7 @@ async function saveRoute(req, res) {
       name: route.name,
       fileName,
       stepsCount: route.steps.length,
+      revision: documentRevision(content),
     },
   });
 }
@@ -516,7 +519,9 @@ async function saveLoadProfile(req, res) {
   await fs.mkdir(workspace().loadProfilesDir, { recursive: true });
   const fileName = `${slugify(name)}.load.json`;
   const profilePath = path.join(workspace().loadProfilesDir, fileName);
-  await fs.writeFile(profilePath, `${JSON.stringify(profile, null, 2)}\n`, { mode: 0o600 });
+  await requireDocumentRevision(profilePath, body.baseRevision, { create: true });
+  const content = `${JSON.stringify(profile, null, 2)}\n`;
+  await writeAtomic(profilePath, content);
   await fs.chmod(profilePath, 0o600).catch(() => {});
 
   json(res, 200, {
@@ -525,6 +530,7 @@ async function saveLoadProfile(req, res) {
       name: profile.name,
       fileName,
       targetsCount: profile.targets.length,
+      revision: documentRevision(content),
       totalWeight: profile.targets.reduce((sum, target) => sum + target.weight, 0),
     },
   });
@@ -532,8 +538,7 @@ async function saveLoadProfile(req, res) {
 
 async function getRoute(req, res, fileName) {
   try {
-    const route = await readRouteFile(fileName);
-    json(res, 200, { route });
+    json(res, 200, await readRouteFile(fileName));
   } catch (_error) {
     notFound(res);
   }
@@ -541,17 +546,19 @@ async function getRoute(req, res, fileName) {
 
 async function deleteRoute(req, res, fileName) {
   try {
+    const body = await readBody(req);
+    await requireDocumentRevision(routePathForName(fileName), body.baseRevision);
     await fs.unlink(routePathForName(fileName));
     json(res, 200, { ok: true, routes: await listRoutes() });
-  } catch (_error) {
+  } catch (error) {
+    if (error.code === 'REVISION_CONFLICT') throw error;
     notFound(res);
   }
 }
 
 async function getLoadProfile(req, res, fileName) {
   try {
-    const profile = await readLoadProfileFile(fileName);
-    json(res, 200, { profile });
+    json(res, 200, await readLoadProfileFile(fileName));
   } catch (_error) {
     notFound(res);
   }
@@ -559,9 +566,12 @@ async function getLoadProfile(req, res, fileName) {
 
 async function deleteLoadProfile(req, res, fileName) {
   try {
+    const body = await readBody(req);
+    await requireDocumentRevision(loadProfilePathForName(fileName), body.baseRevision);
     await fs.unlink(loadProfilePathForName(fileName));
     json(res, 200, { ok: true, loadProfiles: await listLoadProfiles() });
-  } catch (_error) {
+  } catch (error) {
+    if (error.code === 'REVISION_CONFLICT') throw error;
     notFound(res);
   }
 }
@@ -583,6 +593,7 @@ function createRun(command, args, extraEnv = {}) {
 
   runs.set(id, run);
   activeRunId = id;
+  pruneRunHistory(runs);
 
   const child = spawn('make', args, {
     cwd: rootDir,
@@ -684,8 +695,10 @@ async function startRun(req, res) {
     }
 
     const routePath = routePathForName(routeFileName);
-    await fs.access(routePath);
-    if (await workspace().swaggerCatalog.invalid(JSON.parse(await fs.readFile(routePath, 'utf8')).steps || [])) {
+    let route;
+    try { route = await readSavedDocument(routePath, 'route'); }
+    catch (error) { json(res, 409, { error: error.message }); return; }
+    if (await workspace().swaggerCatalog.invalid(route.steps)) {
       json(res, 409, { error: 'Некоторые методы были удалены. Исправьте сценарий перед запуском.' });
       return;
     }
@@ -700,8 +713,10 @@ async function startRun(req, res) {
     }
 
     const profilePath = loadProfilePathForName(profileFileName);
-    await fs.access(profilePath);
-    if (await workspace().swaggerCatalog.invalid(JSON.parse(await fs.readFile(profilePath, 'utf8')).targets || [])) {
+    let profile;
+    try { profile = await readSavedDocument(profilePath, 'profile'); }
+    catch (error) { json(res, 409, { error: error.message }); return; }
+    if (await workspace().swaggerCatalog.invalid(profile.targets)) {
       json(res, 409, { error: 'Некоторые методы были удалены. Исправьте профиль перед запуском.' });
       return;
     }
@@ -758,7 +773,7 @@ async function serveStatic(req, res) {
 
   try {
     await fs.access(filePath);
-    res.writeHead(200, { 'Content-Type': contentType(filePath) });
+    res.writeHead(200, { 'Content-Type': contentType(filePath), 'Cache-Control': 'no-store' });
     createReadStream(filePath).pipe(res);
   } catch (_error) {
     notFound(res);
@@ -766,6 +781,29 @@ async function serveStatic(req, res) {
 }
 
 async function handleRequest(req, res) {
+  if (shutdownRequested && req.method !== 'GET') {
+    json(res, 503, { error: 'FlowLoad завершает работу. Дождитесь остановки сервера.' });
+    return;
+  }
+  const pathname = new URL(req.url, 'http://localhost').pathname;
+  const mutates = ['POST', 'PATCH', 'DELETE'].includes(req.method) &&
+    /^\/api\/(?:token|workspaces|run|swagger\/catalog|routes|load-profiles)(?:\/|$)/.test(pathname);
+  if (!mutates) return dispatchRequest(req, res);
+  // Serialize validation and launch with edits so k6 cannot read a changed input file.
+  return queueMutation(async () => {
+    if (shutdownRequested) {
+      json(res, 503, { error: 'FlowLoad завершает работу. Дождитесь остановки сервера.' });
+      return;
+    }
+    if (activeRunId && pathname !== '/api/run') {
+      json(res, 409, { error: 'Дождитесь завершения текущего теста перед изменением данных.' });
+      return;
+    }
+    await dispatchRequest(req, res);
+  });
+}
+
+async function dispatchRequest(req, res) {
   try {
     const url = new URL(req.url, `http://127.0.0.1:${port}`);
     if (url.pathname === '/api/workspaces') {
@@ -777,7 +815,7 @@ async function handleRequest(req, res) {
         }
         try {
           json(res, 200, { workspace: await workspaces.save(await readBody(req), req.method === 'PATCH' ? workspace().id : undefined) });
-        } catch (error) { json(res, 400, { error: error.message }); }
+        } catch (error) { json(res, error.status || 400, { error: error.message, code: error.code }); }
       } else json(res, 405, { error: 'Method not allowed' });
       return;
     }
@@ -886,17 +924,26 @@ async function handleRequest(req, res) {
 
     notFound(res);
   } catch (error) {
-    json(res, 500, { error: error.message });
+    json(res, error.status || 500, { error: error.message, code: error.code });
   }
 }
 
 const server = createServer(async (req, res) => {
   try {
     const url = new URL(req.url, 'http://localhost');
+    // Keep the UI and its lifecycle reachable when the workspace registry is damaged.
+    if (req.method === 'GET' && !url.pathname.startsWith('/api/') && !url.pathname.startsWith('/reports/')) {
+      await serveStatic(req, res);
+      return;
+    }
+    if (req.method === 'GET' && url.pathname === '/api/lifecycle') {
+      connectLifecycleClient(req, res);
+      return;
+    }
     const id = req.headers['x-workspace-id'] || url.searchParams.get('workspace') || 'default';
     const current = await workspaces.get(id);
     await workspaceContext.run(current, () => handleRequest(req, res));
-  } catch (error) { json(res, 404, { error: error.message }); }
+  } catch (error) { json(res, error.status || 500, { error: error.message, code: error.code }); }
 });
 
 function openBrowser(url) {
@@ -916,6 +963,14 @@ server.on('error', (error) => {
   process.exit(1);
 });
 
+try {
+  await acquireServerLock(rootDir);
+} catch (error) {
+  console.error(error.message);
+  process.exit(1);
+}
+process.on('SIGINT', requestShutdown);
+process.on('SIGTERM', requestShutdown);
 server.listen(port, '127.0.0.1', () => {
   const url = `http://127.0.0.1:${port}`;
   console.log(`Local UI: ${url}`);

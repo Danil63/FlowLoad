@@ -1,5 +1,9 @@
 import { suggestCriticalRoute } from './critical-route.js';
 import { installScenarioDrag } from './scenario-drag.js';
+import { workspaceDraftKey, browserDraftStorage } from './storage-keys.js';
+import { catalogValidator } from './catalog-state.js';
+import { createDraftWriter } from './draft-storage.js';
+import { revisionForSave } from './editor-revision.js';
 
 const workspaceId = new URL(window.location.href).searchParams.get('workspace') || 'default';
 let generatorBusy = false;
@@ -33,6 +37,7 @@ function switchWorkspace(id) {
   if (id === workspaceId) return;
   saveWorkspace();
   saveLoadProfileWorkspace();
+  draftWriter.flush();
   const url = new URL(window.location.href);
   url.searchParams.set('workspace', id);
   window.location.assign(url.href);
@@ -73,7 +78,7 @@ function showPage(focusHeading = false) {
   });
   const heading = document.querySelector('#pageTitle');
   heading.textContent = pageNames[page];
-  document.title = `${pageNames[page]} · k6 Load UI`;
+  document.title = `${pageNames[page]} · FlowLoad`;
   window.scrollTo(0, 0);
   if (focusHeading) heading.focus({ preventScroll: true });
 }
@@ -81,6 +86,16 @@ window.addEventListener('hashchange', () => showPage(true));
 showPage();
 
 const statusText = document.querySelector('#statusText');
+const draftStorageWarning = document.querySelector('#draftStorageWarning');
+const draftStorage = browserDraftStorage();
+const draftWriter = createDraftWriter(draftStorage, {
+  onError: () => { draftStorageWarning.hidden = false; },
+  onSuccess: () => { draftStorageWarning.hidden = true; },
+});
+window.addEventListener('pagehide', () => draftWriter.flush());
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden) draftWriter.flush();
+});
 const tokenForm = document.querySelector('#tokenForm');
 const tokenInput = document.querySelector('#tokenInput');
 const tokenState = document.querySelector('#tokenState');
@@ -202,22 +217,55 @@ let savedRoutes = [];
 let loadProfileTargets = [];
 let savedLoadProfiles = [];
 let expandedLoadTargetKey = null;
+let routeBase = null;
+let profileBase = null;
+let routeEditEpoch = 0;
+let profileEditEpoch = 0;
+let routeSaving = false;
+let profileSaving = false;
+const revisionDialog = document.querySelector('#revisionDialog');
+const revisionCopyName = document.querySelector('#revisionCopyName');
+const revisionError = document.querySelector('#revisionError');
+let revisionConflict = null;
+document.querySelector('#revisionCancel').addEventListener('click', () => revisionDialog.close());
+document.querySelector('#revisionForm').addEventListener('submit', async event => {
+  event.preventDefault();
+  if (!revisionConflict) return;
+  const { kind, epoch } = revisionConflict;
+  if (epoch !== (kind === 'route' ? routeEditEpoch : profileEditEpoch)) {
+    revisionDialog.close();
+    return;
+  }
+  if (await saveEditor(kind, { name: revisionCopyName.value.trim(), copy: true, fromDialog: true })) revisionDialog.close();
+});
+revisionDialog.addEventListener('cancel', event => {
+  if (routeSaving || profileSaving) event.preventDefault();
+});
 
-const workspaceStorageKey = 'bigJourneyK6RouteBuilder' + (workspaceId === 'default' ? '' : `:${workspaceId}`);
+const workspaceStorageKey = workspaceDraftKey(draftStorage, 'route', workspaceId);
 let swaggerCatalog = { sources: [], deleted: [] };
+let catalogLoaded = false;
+let methodInvalid = () => false;
 const swaggerSourceSelect = document.querySelector('#swaggerSourceSelect');
 const deleteSwaggerSource = document.querySelector('#deleteSwaggerSource');
 const swaggerDeleteDialog = document.querySelector('#swaggerDeleteDialog');
 let pendingSwaggerDelete = null;
 function isDeletedMethod(item) {
-  return swaggerCatalog.deleted.some(d => item.catalogMethodId ? d.catalogMethodId === item.catalogMethodId
-    : d.key === `${String(item.method).toUpperCase()} ${item.path}`);
+  return methodInvalid(item);
+}
+function invalidReason(item) {
+  return item.fileError || 'некоторые методы были удалены';
+}
+function invalidSuffix(item) {
+  return item.invalid ? item.fileError ? ' · файл недоступен' : ' · методы удалены' : '';
 }
 function invalidAttributes(item) {
-  return item.invalid ? ' class="invalidScenario" title="некоторые методы были удалены"' : '';
+  return item.invalid ? ` class="invalidScenario" title="${escapeHtml(invalidReason(item))}"` : '';
 }
 function useCatalog(data) {
+  catalogLoaded = true;
   swaggerCatalog = data;
+  methodInvalid = catalogValidator(data);
   const previous = swaggerSourceSelect.value;
   endpoints = data.sources.flatMap(source => source.endpoints);
   swaggerSourceSelect.innerHTML = '<option value="">Все документы</option>' + data.sources.map(source =>
@@ -254,7 +302,7 @@ document.querySelector('#swaggerDeleteConfirm').addEventListener('click', async 
   } catch (error) { document.querySelector('#swaggerDeleteError').textContent = error.message; }
   finally { button.disabled = false; }
 });
-const loadProfileStorageKey = 'bigJourneyK6LoadProfileBuilder' + (workspaceId === 'default' ? '' : `:${workspaceId}`);
+const loadProfileStorageKey = workspaceDraftKey(draftStorage, 'profile', workspaceId);
 const defaultMethodVus = 10;
 const loadScaleMin = 10;
 const loadScaleMax = 1500;
@@ -272,12 +320,16 @@ async function requestJson(url, options = {}) {
 
   const response = await fetch(url, {
     ...options,
+    cache: 'no-store',
     headers: { 'Content-Type': 'application/json', ...options.headers, 'X-Workspace-Id': workspaceId },
   });
   const data = await response.json();
 
   if (!response.ok) {
-    throw new Error(data.error || 'Request failed');
+    const error = new Error(data.error || 'Request failed');
+    error.code = data.code;
+    error.status = response.status;
+    throw error;
   }
 
   return data;
@@ -328,7 +380,11 @@ function riskLabel(risk) {
     danger: 'осторожно',
   };
 
-  return labels[risk] || risk;
+  return labels[risk] || risk || 'не определён';
+}
+
+function methodTags(item) {
+  return Array.isArray(item.tags) ? item.tags : [];
 }
 
 function methodClass(method) {
@@ -349,7 +405,7 @@ function filteredEndpoints() {
       endpoint.path,
       endpoint.summary,
       endpoint.operationId,
-      endpoint.tags.join(' '),
+      methodTags(endpoint).join(' '),
       endpoint.risk,
     ]
       .join(' ')
@@ -369,7 +425,7 @@ function filteredLoadEndpoints() {
       endpoint.path,
       endpoint.summary,
       endpoint.operationId,
-      endpoint.tags.join(' '),
+      methodTags(endpoint).join(' '),
       endpoint.risk,
     ]
       .join(' ')
@@ -383,7 +439,7 @@ function updateRouteControls() {
   criticalRouteButton.disabled = endpoints.length === 0;
   addSelectedButton.disabled = selectedEndpointIds.length !== 1;
   connectButton.disabled = selectedEndpointIds.length !== 2;
-  saveRouteButton.disabled = route.length === 0;
+  saveRouteButton.disabled = routeSaving || route.length === 0;
 }
 
 function renderMethods() {
@@ -416,7 +472,7 @@ function renderMethods() {
         </span>
         <strong title="${escapeHtml(endpoint.path)}">${escapeHtml(endpoint.path)}</strong>
         ${summary}
-        <span class="methodMeta">${auth}<span class="metaPill">${escapeHtml(endpoint.tags[0] || 'api')}</span></span>
+        <span class="methodMeta">${auth}<span class="metaPill">${escapeHtml(methodTags(endpoint)[0] || 'api')}</span></span>
       </div>`;
     })
     .join('');
@@ -475,13 +531,13 @@ function renderSavedRoutes(routes = []) {
   savedRoutesList.innerHTML = routes
     .map((savedRoute) => {
       const date = new Date(savedRoute.updatedAt).toLocaleString('ru-RU');
-      return `<div class="savedRoute${savedRoute.invalid ? ' invalidScenario' : ''}"${savedRoute.invalid ? ' title="некоторые методы были удалены"' : ''}>
+      return `<div class="savedRoute${savedRoute.invalid ? ' invalidScenario' : ''}"${savedRoute.invalid ? ` title="${escapeHtml(invalidReason(savedRoute))}"` : ''}>
         <div class="savedRouteInfo">
           <strong>${escapeHtml(savedRoute.name)}</strong>
-          <span>${savedRoute.stepsCount} шагов · ${date}</span>
+          <span>${escapeHtml(savedRoute.fileError || `${savedRoute.stepsCount} шагов · ${date}`)}</span>
         </div>
         <div class="savedRouteActions">
-          <button class="ghost" type="button" data-route-action="load" data-route-file="${escapeHtml(savedRoute.fileName)}">Открыть</button>
+          <button class="ghost" type="button" data-route-action="load" data-route-file="${escapeHtml(savedRoute.fileName)}"${savedRoute.fileError ? ' disabled' : ''}>Открыть</button>
           <button class="ghost dangerButton" type="button" data-route-action="delete" data-route-file="${escapeHtml(savedRoute.fileName)}">Удалить</button>
         </div>
       </div>`;
@@ -490,7 +546,7 @@ function renderSavedRoutes(routes = []) {
 }
 
 function renderRouteOptions() {
-  loadScenarioSelect.innerHTML = '<option value="">Выберите сохранённый сценарий</option>' + savedRoutes.map(item => `<option value="${escapeHtml(item.fileName)}"${invalidAttributes(item)}${item.invalid ? ' disabled' : ''}>${escapeHtml(item.name)}${item.invalid ? ' · методы удалены' : ''}</option>`).join('');
+  loadScenarioSelect.innerHTML = '<option value="">Выберите сохранённый сценарий</option>' + savedRoutes.map(item => `<option value="${escapeHtml(item.fileName)}"${invalidAttributes(item)}${item.invalid ? ' disabled' : ''}>${escapeHtml(item.name)}${invalidSuffix(item)}</option>`).join('');
   loadScenarioSelect.disabled = !savedRoutes.length;
   if (savedRoutes.some(item => item.fileName === loadScenarioFile)) loadScenarioSelect.value = loadScenarioFile;
   else if (loadScenarioFile) {
@@ -503,7 +559,7 @@ function renderRouteOptions() {
   renderCustomScenarioOptions();
   const selectedBuilderRoute = builderRouteSelect.value;
   builderRouteSelect.innerHTML = `<option value="">${savedRoutes.length ? 'Выбрать сценарий' : 'Нет сохранённых сценариев'}</option>` + savedRoutes
-    .map(item => `<option value="${escapeHtml(item.fileName)}"${invalidAttributes(item)}>${escapeHtml(item.name)} (${item.stepsCount})${item.invalid ? ' · методы удалены' : ''}</option>`).join('');
+    .map(item => `<option value="${escapeHtml(item.fileName)}"${invalidAttributes(item)}${item.fileError ? ' disabled' : ''}>${escapeHtml(item.name)} (${item.stepsCount})${invalidSuffix(item)}</option>`).join('');
   builderRouteSelect.disabled = savedRoutes.length === 0;
   if (savedRoutes.some(item => item.fileName === selectedBuilderRoute)) builderRouteSelect.value = selectedBuilderRoute;
   if (!savedRoutes.length) {
@@ -546,8 +602,8 @@ function renderLoadProfileOptions() {
 }
 
 function selectedCustomScenario() {
-  return [...savedRoutes.map(item => ({ key: `route:${item.fileName}`, command: 'route', file: item.fileName, name: item.name, invalid: item.invalid })),
-    ...savedLoadProfiles.map(item => ({ key: `profile:${item.fileName}`, command: 'profile', file: item.fileName, name: item.name, invalid: item.invalid }))]
+  return [...savedRoutes.map(item => ({ ...item, key: `route:${item.fileName}`, command: 'route', file: item.fileName })),
+    ...savedLoadProfiles.map(item => ({ ...item, key: `profile:${item.fileName}`, command: 'profile', file: item.fileName }))]
     .find(item => item.key === commandSelect.value);
 }
 
@@ -559,12 +615,12 @@ function updateCustomScenarioControls() {
   profileSelect.classList.add('hidden');
   profileSelectLabel.classList.add('hidden');
   runButton.disabled = generatorBusy || uiRunActive || !selected || selected.invalid;
-  runButton.title = selected?.invalid ? 'некоторые методы были удалены' : '';
+  runButton.title = selected?.invalid ? invalidReason(selected) : '';
 }
 
 function renderCustomScenarioOptions() {
   const previous = commandSelect.value;
-  const group = (label, type, items) => items.length ? `<optgroup label="${label}">${items.map(item => `<option value="${escapeHtml(`${type}:${item.fileName}`)}"${invalidAttributes(item)}${item.invalid ? ' disabled' : ''}>${escapeHtml(item.name)}${item.invalid ? ' · методы удалены' : ''}</option>`).join('')}</optgroup>` : '';
+  const group = (label, type, items) => items.length ? `<optgroup label="${label}">${items.map(item => `<option value="${escapeHtml(`${type}:${item.fileName}`)}"${invalidAttributes(item)}${item.invalid ? ' disabled' : ''}>${escapeHtml(item.name)}${invalidSuffix(item)}</option>`).join('')}</optgroup>` : '';
   commandSelect.innerHTML = '<option value="">' + (savedRoutes.length || savedLoadProfiles.length ? 'Выберите сценарий' : 'Нет сохранённых сценариев') + '</option>'
     + group('Сценарии', 'route', savedRoutes) + group('Профили нагрузки', 'profile', savedLoadProfiles);
   commandSelect.disabled = !savedRoutes.length && !savedLoadProfiles.length;
@@ -581,7 +637,7 @@ function endpointToLoadTarget(endpoint, vus = defaultMethodVus) {
     path: endpoint.path,
     summary: endpoint.summary,
     operationId: endpoint.operationId,
-    tags: endpoint.tags,
+    tags: methodTags(endpoint),
     authRequired: endpoint.authRequired,
     risk: endpoint.risk,
     expectStatus: 200,
@@ -634,7 +690,7 @@ function matchesLoadQuery(target) {
     target.path,
     target.summary,
     target.operationId,
-    target.tags.join(' '),
+    methodTags(target).join(' '),
     target.risk,
   ]
     .join(' ')
@@ -686,7 +742,7 @@ function renderLoadTargets() {
   const scrollLeft = loadTargetsList.querySelector('.loadGraphScroller')?.scrollLeft || 0;
   ensureDefaultLoadTargets();
   const total = loadProfileTotal();
-  saveLoadProfileButton.disabled = loadProfileTargets.length === 0;
+  saveLoadProfileButton.disabled = profileSaving || loadProfileTargets.length === 0;
 
   if (!loadProfileTargets.length) {
     loadTargetsList.className = 'loadTargetsList empty';
@@ -739,7 +795,7 @@ function renderLoadTargets() {
           <span class="loadPointDot" title="${weight} VUs"></span>
           <div class="loadRange" role="slider" tabindex="0" aria-orientation="vertical" aria-valuemin="10" aria-valuemax="100000" aria-valuenow="${weight}" data-load-range-index="${originalIndex}" aria-label="VUs для ${escapeHtml(target.method)} ${escapeHtml(target.path)}"></div>
         </div>
-        <div class="loadTargetCard">
+        <div class="loadTargetCard${isDeletedMethod(target) ? ' invalidScenario' : ''}"${isDeletedMethod(target) ? ' title="некоторые методы были удалены"' : ''}>
           <button type="button" class="loadTargetToggle" data-load-card-index="${originalIndex}" aria-expanded="${isExpanded}">
           <div class="loadTargetTop">
             <span class="${methodClass(target.method)}">${escapeHtml(target.method)}</span>
@@ -751,7 +807,7 @@ function renderLoadTargets() {
           </div>
           <div class="loadDetails">
             ${summary}
-            <span class="loadOperation">${escapeHtml(target.operationId || target.tags[0] || 'api')}</span>
+            <span class="loadOperation">${escapeHtml(target.operationId || methodTags(target)[0] || 'api')}</span>
             <span class="loadMetaLine">
               <span>${escapeHtml(auth)}</span>
               <span>${escapeHtml(riskLabel(target.risk))}</span>
@@ -795,13 +851,13 @@ function renderSavedLoadProfiles(profiles = []) {
   savedLoadProfilesList.innerHTML = profiles
     .map((profile) => {
       const date = new Date(profile.updatedAt).toLocaleString('ru-RU');
-      return `<div class="savedRoute">
+      return `<div class="savedRoute${profile.invalid ? ' invalidScenario' : ''}"${profile.invalid ? ` title="${escapeHtml(invalidReason(profile))}"` : ''}>
         <div class="savedRouteInfo">
           <strong>${escapeHtml(profile.name)}</strong>
-          <span>${profile.targetsCount} методов · ${profile.totalWeight} VUs · ${date}</span>
+          <span>${escapeHtml(profile.fileError || `${profile.targetsCount} методов · ${profile.totalWeight} VUs · ${date}`)}</span>
         </div>
         <div class="savedRouteActions">
-          <button class="ghost" type="button" data-load-profile-action="load" data-load-profile-file="${escapeHtml(profile.fileName)}">Открыть</button>
+          <button class="ghost" type="button" data-load-profile-action="load" data-load-profile-file="${escapeHtml(profile.fileName)}"${profile.fileError ? ' disabled' : ''}>Открыть</button>
           <button class="ghost dangerButton" type="button" data-load-profile-action="delete" data-load-profile-file="${escapeHtml(profile.fileName)}">Удалить</button>
         </div>
       </div>`;
@@ -810,38 +866,34 @@ function renderSavedLoadProfiles(profiles = []) {
 }
 
 function saveWorkspace() {
-  localStorage.setItem(
-    workspaceStorageKey,
-    JSON.stringify({
-      endpoints,
-      route,
-      routeName: routeNameInput.value,
-      savedAt: Date.now(),
-    }),
-  );
+  draftWriter.save(workspaceStorageKey, () => ({
+    // Keep legacy methods only until their migration to the server catalog succeeds.
+    ...(catalogLoaded ? {} : { endpoints }),
+    route,
+    routeName: routeNameInput.value,
+    base: routeBase,
+  }));
 }
 
 function saveLoadProfileWorkspace() {
-  localStorage.setItem(
-    loadProfileStorageKey,
-    JSON.stringify({
-      loadProfileTargets,
-      loadProfileName: loadProfileNameInput.value,
-      loadScenarioFile,
-      loadScenarioSteps,
-      savedAt: Date.now(),
-    }),
-  );
+  draftWriter.save(loadProfileStorageKey, () => ({
+    loadProfileTargets,
+    loadProfileName: loadProfileNameInput.value,
+    loadScenarioFile,
+    loadScenarioSteps,
+    base: profileBase,
+  }));
 }
 
 function restoreWorkspace() {
   try {
-    const raw = localStorage.getItem(workspaceStorageKey);
+    const raw = draftStorage.getItem(workspaceStorageKey);
     if (!raw) return;
 
     const saved = JSON.parse(raw);
     endpoints = Array.isArray(saved.endpoints) ? saved.endpoints : [];
     route = Array.isArray(saved.route) ? saved.route : [];
+    routeBase = saved.base || null;
 
     if (saved.routeName) {
       routeNameInput.value = saved.routeName;
@@ -851,25 +903,28 @@ function restoreWorkspace() {
       swaggerState.textContent = `Восстановлено ${endpoints.length} методов из прошлого сеанса.`;
     }
   } catch (_error) {
-    localStorage.removeItem(workspaceStorageKey);
+    draftStorageWarning.hidden = false;
+    try { draftStorage.removeItem(workspaceStorageKey); } catch {}
   }
 }
 
 function restoreLoadProfileWorkspace() {
   try {
-    const raw = localStorage.getItem(loadProfileStorageKey);
+    const raw = draftStorage.getItem(loadProfileStorageKey);
     if (!raw) return;
 
     const saved = JSON.parse(raw);
     loadScenarioFile = saved.loadScenarioFile || '';
     loadScenarioSteps = Array.isArray(saved.loadScenarioSteps) ? saved.loadScenarioSteps : [];
     loadProfileTargets = loadScenarioSteps.length && Array.isArray(saved.loadProfileTargets) ? saved.loadProfileTargets : [];
+    profileBase = saved.base || null;
 
     if (saved.loadProfileName) {
       loadProfileNameInput.value = saved.loadProfileName;
     }
   } catch (_error) {
-    localStorage.removeItem(loadProfileStorageKey);
+    draftStorageWarning.hidden = false;
+    try { draftStorage.removeItem(loadProfileStorageKey); } catch {}
   }
 }
 
@@ -894,8 +949,26 @@ function renderRun(run) {
   runOutput.scrollTop = runOutput.scrollHeight;
 }
 
-async function refresh() {
-  const projects = await requestJson('/api/workspaces');
+let refreshing = null;
+function refresh() {
+  if (refreshing) return refreshing.then(() => refresh());
+  if (!refreshing) refreshing = refreshState().finally(() => { refreshing = null; });
+  return refreshing;
+}
+async function refreshState() {
+  let projects;
+  try { projects = await requestJson('/api/workspaces'); }
+  catch (error) {
+    workspaceMetadata = null;
+    document.querySelector('#workspaceActiveName').textContent = 'Окружения недоступны';
+    document.querySelector('#workspaceEdit').disabled = true;
+    document.querySelector('#workspaceCreate').disabled = true;
+    document.querySelector('#workspaceApi').textContent = '';
+    document.querySelector('#workspaceCount').textContent = '';
+    workspaceList.innerHTML = '<li class="muted">Список окружений недоступен.</li>';
+    throw error;
+  }
+  document.querySelector('#workspaceCreate').disabled = false;
   workspaceList.innerHTML = projects.workspaces.map(item => {
     const active = item.id === workspaceId;
     return `<li><button type="button" class="workspaceRow" data-workspace-id="${escapeHtml(item.id)}" aria-pressed="${active}">
@@ -926,6 +999,7 @@ async function refresh() {
   renderReports(data.reports);
   renderSavedRoutes(data.routes || []);
   renderSavedLoadProfiles(data.loadProfiles || []);
+  renderLoadTargets();
 
   if (data.activeRunId && !pollTimer) {
     startPolling();
@@ -933,8 +1007,11 @@ async function refresh() {
 }
 
 async function loadSavedRoute(fileName) {
+  const epoch = ++routeEditEpoch;
   const data = await requestJson(`/api/routes/${encodeURIComponent(fileName)}`);
+  if (epoch !== routeEditEpoch) return false;
   const savedRoute = data.route;
+  routeBase = { name: savedRoute.name, fileName: data.fileName, revision: data.revision };
 
   routeNameInput.value = savedRoute.name || fileName.replace(/\.route\.json$/, '');
   route = Array.isArray(savedRoute.steps)
@@ -956,6 +1033,7 @@ async function loadSavedRoute(fileName) {
   renderMethods();
   renderRoute();
   swaggerState.textContent = `Сценарий "${routeNameInput.value}" открыт в конструкторе.`;
+  return true;
 }
 
 builderRouteSelect.addEventListener('change', async () => {
@@ -963,7 +1041,7 @@ builderRouteSelect.addEventListener('change', async () => {
   if (!fileName) return;
   builderRouteSelect.disabled = true;
   try {
-    await loadSavedRoute(fileName);
+    if (!await loadSavedRoute(fileName)) return;
     const base = routeNameInput.value;
     let number = 1;
     let copyName = `${base}-copy`;
@@ -989,7 +1067,7 @@ async function deleteSavedRoute(fileName) {
     return;
   }
 
-  await requestJson(`/api/routes/${encodeURIComponent(fileName)}`, { method: 'DELETE' });
+  await requestJson(`/api/routes/${encodeURIComponent(fileName)}`, { method: 'DELETE', body: JSON.stringify({ baseRevision: savedRoute?.revision }) });
   if (routeSelect.value === fileName) {
     routeSelect.value = '';
   }
@@ -998,8 +1076,12 @@ async function deleteSavedRoute(fileName) {
 }
 
 async function loadSavedLoadProfile(fileName) {
+  const epoch = ++profileEditEpoch;
+  ++loadScenarioRequest;
   const data = await requestJson(`/api/load-profiles/${encodeURIComponent(fileName)}`);
+  if (epoch !== profileEditEpoch) return;
   const profile = data.profile;
+  profileBase = { name: profile.name, fileName: data.fileName, revision: data.revision };
   loadScenarioFile = '';
   loadScenarioSelect.value = '';
   loadScenarioSteps = Array.isArray(profile.targets) ? profile.targets : [];
@@ -1034,7 +1116,7 @@ async function deleteSavedLoadProfile(fileName) {
     return;
   }
 
-  await requestJson(`/api/load-profiles/${encodeURIComponent(fileName)}`, { method: 'DELETE' });
+  await requestJson(`/api/load-profiles/${encodeURIComponent(fileName)}`, { method: 'DELETE', body: JSON.stringify({ baseRevision: savedProfile?.revision }) });
   if (profileSelect.value === fileName) {
     profileSelect.value = '';
   }
@@ -1075,7 +1157,7 @@ function endpointToRouteStep(endpoint) {
     path: endpoint.path,
     summary: endpoint.summary,
     operationId: endpoint.operationId,
-    tags: endpoint.tags,
+    tags: methodTags(endpoint),
     authRequired: endpoint.authRequired,
     risk: endpoint.risk,
     expectStatus: 200,
@@ -1232,6 +1314,13 @@ tokenCheckButton.addEventListener('click', async () => {
   }
 });
 const tokenHelpDialog = document.querySelector('#tokenHelpDialog');
+const loadHelpDialog = document.querySelector('#loadHelpDialog');
+document.querySelector('#loadHelpButton').addEventListener('click', () => loadHelpDialog.showModal());
+document.querySelector('#loadHelpClose').addEventListener('click', () => loadHelpDialog.close());
+loadHelpDialog.addEventListener('click', event => {
+  const bounds = loadHelpDialog.getBoundingClientRect();
+  if (event.target === loadHelpDialog && (event.clientX < bounds.left || event.clientX > bounds.right || event.clientY < bounds.top || event.clientY > bounds.bottom)) loadHelpDialog.close();
+});
 document.querySelector('#tokenHelpButton').addEventListener('click', () => tokenHelpDialog.showModal());
 document.querySelector('#tokenHelpClose').addEventListener('click', () => tokenHelpDialog.close());
 tokenHelpDialog.addEventListener('click', event => {
@@ -1396,6 +1485,8 @@ swaggerUrlForm.addEventListener('submit', async (event) => {
 
 methodSearchInput.addEventListener('input', renderMethods);
 loadScenarioSelect.addEventListener('change', async () => {
+  ++profileEditEpoch;
+  profileBase = null;
   const request = ++loadScenarioRequest;
   loadScenarioFile = loadScenarioSelect.value;
   loadScenarioSteps = [];
@@ -1687,40 +1778,64 @@ clearLoadProfileButton.addEventListener('click', () => {
   renderLoadTargets();
 });
 
-saveRouteButton.addEventListener('click', async () => {
-  const name = routeNameInput.value.trim();
-
+async function saveEditor(kind, { name, copy = false, fromDialog = false } = {}) {
+  const isRoute = kind === 'route';
+  if (isRoute ? routeSaving : profileSaving) return false;
+  const input = isRoute ? routeNameInput : loadProfileNameInput;
+  const state = isRoute ? swaggerState : loadProfileState;
+  const epoch = isRoute ? routeEditEpoch : profileEditEpoch;
+  name ??= input.value.trim();
+  if (isRoute) routeSaving = true;
+  else profileSaving = true;
+  (isRoute ? saveRouteButton : saveLoadProfileButton).disabled = true;
+  document.querySelector('#revisionCopy').disabled = true;
+  document.querySelector('#revisionCancel').disabled = true;
+  revisionError.textContent = '';
   try {
-    const data = await requestJson('/api/routes', {
-      method: 'POST',
-      body: JSON.stringify({ name, steps: route }),
+    const data = await requestJson(isRoute ? '/api/routes' : '/api/load-profiles', {
+      method: 'POST', body: JSON.stringify({ name,
+        baseRevision: copy ? null : revisionForSave(isRoute ? routeBase : profileBase, name),
+        ...(isRoute ? { steps: route } : { targets: loadProfileTargets }),
+      }),
     });
-
-    swaggerState.textContent = `Сценарий "${data.route.name}" сохранен: ${data.route.stepsCount} шагов.`;
-    await refresh();
-    builderRouteSelect.value = data.route.fileName;
+    const saved = data[kind];
+    // A late save response must not change another document already opened in this editor.
+    if (epoch === (isRoute ? routeEditEpoch : profileEditEpoch)) {
+      if (isRoute) routeBase = saved;
+      else profileBase = saved;
+      if (copy) input.value = saved.name;
+      if (isRoute) saveWorkspace(); else saveLoadProfileWorkspace();
+    }
+    let refreshError = null;
+    try { await refresh(); } catch (error) { refreshError = error; }
+    if (epoch === (isRoute ? routeEditEpoch : profileEditEpoch)) {
+      state.textContent = `${isRoute ? 'Сценарий' : 'Профиль'} "${saved.name}" сохранён.${refreshError ? ' Список пока не обновлён: ' + refreshError.message : ''}`;
+      if (isRoute) builderRouteSelect.value = saved.fileName;
+      else { commandSelect.value = `profile:${saved.fileName}`; updateCustomScenarioControls(); }
+    }
+    return true;
   } catch (error) {
-    swaggerState.textContent = error.message;
+    if (epoch !== (isRoute ? routeEditEpoch : profileEditEpoch)) return false;
+    state.textContent = error.message;
+    if (fromDialog) revisionError.textContent = error.message;
+    else if (error.code === 'REVISION_CONFLICT') {
+      revisionConflict = { kind, epoch };
+      document.querySelector('#revisionMessage').textContent = error.message;
+      revisionCopyName.value = `${input.value.trim()}-copy`;
+      revisionDialog.showModal();
+      revisionCopyName.focus();
+    }
+    return false;
+  } finally {
+    if (isRoute) routeSaving = false; else profileSaving = false;
+    saveRouteButton.disabled = routeSaving || route.length === 0;
+    saveLoadProfileButton.disabled = profileSaving || loadProfileTargets.length === 0;
+    document.querySelector('#revisionCopy').disabled = routeSaving || profileSaving;
+    document.querySelector('#revisionCancel').disabled = routeSaving || profileSaving;
   }
-});
-
-saveLoadProfileButton.addEventListener('click', async () => {
-  const name = loadProfileNameInput.value.trim();
-
-  try {
-    const data = await requestJson('/api/load-profiles', {
-      method: 'POST',
-      body: JSON.stringify({ name, targets: loadProfileTargets }),
-    });
-
-    loadProfileState.textContent = `Профиль "${data.profile.name}" сохранен: ${data.profile.targetsCount} методов, ${data.profile.totalWeight} VUs.`;
-    await refresh();
-    commandSelect.value = `profile:${data.profile.fileName}`;
-    updateCustomScenarioControls();
-  } catch (error) {
-    loadProfileState.textContent = error.message;
-  }
-});
+}
+saveRouteButton.addEventListener('click', () => saveEditor('route'));
+saveLoadProfileButton.addEventListener('click', () => saveEditor('profile'));
 
 commandSelect.dispatchEvent(new Event('change'));
 restoreWorkspace();
@@ -1738,6 +1853,12 @@ if (isFileMode) {
   runButton.disabled = true;
 } else {
   lifecycleConnection = new EventSource('/api/lifecycle');
+  const syncCatalog = () => {
+    if (document.hidden || refreshing || scenarioDrag.isDragging()) return;
+    refresh().catch(error => { statusText.textContent = error.message; });
+  };
+  window.addEventListener('focus', syncCatalog);
+  document.addEventListener('visibilitychange', syncCatalog);
   refresh().catch((error) => {
     statusText.textContent = error.message;
   });

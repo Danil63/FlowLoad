@@ -1,9 +1,9 @@
 apiVersion: 1
 
 providers:
-  - name: Big Journey k6
+  - name: FlowLoad
     orgId: 1
-    folder: Big Journey
+    folder: FlowLoad
     type: file
     disableDeletion: false
     updateIntervalSeconds: 30

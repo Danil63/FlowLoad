@@ -43,7 +43,7 @@ push_loki_log() {
   timestamp_ns="$(date +%s)000000000"
   safe_test_id="$(safe_label "$TEST_ID")"
   safe_mode="$(safe_label "$MODE")"
-  payload='{"streams":[{"stream":{"job":"k6","project":"big-journey","mode":"'"$safe_mode"'","testid":"'"$safe_test_id"'","level":"'"$level"'"},"values":[["'"$timestamp_ns"'","'"$message"'"]]}]}'
+  payload='{"streams":[{"stream":{"job":"k6","project":"flowload","mode":"'"$safe_mode"'","testid":"'"$safe_test_id"'","level":"'"$level"'"},"values":[["'"$timestamp_ns"'","'"$message"'"]]}]}'
 
   curl -sS -o /dev/null \
     -X POST "$GRAFANA_GATEWAY_URL/loki/api/v1/push" \
@@ -62,7 +62,7 @@ run_k6() {
   K6_PROMETHEUS_RW_STALE_MARKERS=true \
   k6 run -o experimental-prometheus-rw \
     --tag "testid=$TEST_ID" \
-    --tag "project=big-journey" \
+    --tag "project=flowload" \
     --tag "mode=$MODE" \
     "$@" \
     "$scenario"

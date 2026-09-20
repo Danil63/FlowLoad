@@ -56,7 +56,7 @@ export const options = {
     'checks{scope:custom_route}': ['rate>0.99'],
   },
   tags: {
-    app: 'entreporgneur-big-journey',
+    app: 'flowload',
     environment: 'production',
     test_type: 'custom_route',
   },

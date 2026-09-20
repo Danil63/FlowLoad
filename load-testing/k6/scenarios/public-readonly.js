@@ -41,7 +41,7 @@ export const options = {
     'checks{scope:public}': ['rate>0.99'],
   },
   tags: {
-    app: 'entreporgneur-big-journey',
+    app: 'flowload',
     environment: 'production',
     test_type: 'public_readonly',
   },

@@ -37,3 +37,22 @@ test('rejects unsafe API URLs and invalid names', async t => {
   await assert.rejects(store.save({ name: '', baseUrl: 'https://example.com' }));
   assert.equal((await store.list()).length, 1);
 });
+
+test('corrupt registry never falls back to default or trusts unsafe directory IDs', async t => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'workspaces-'));
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  const store = new Workspaces(root);
+  await store.save({ name: 'A', baseUrl: 'https://example.com' });
+  const original = await store.list();
+  for (const data of [[], {}, [original[0], original[0]], [{ ...original[0], id: '../escape' }], [{ ...original[0], baseUrl: 'file:///tmp' }]]) {
+    await fs.writeFile(store.storage.file, JSON.stringify(data));
+    assert.equal((await store.storage.inspect()).current, 'invalid');
+    await assert.rejects(store.get(), { code: 'STORAGE_RECOVERY_REQUIRED' });
+    await store.storage.recover();
+    assert.equal((await store.list()).length, 2);
+  }
+  await fs.unlink(store.storage.file);
+  await assert.rejects(new Workspaces(root).list(), { code: 'STORAGE_RECOVERY_REQUIRED' });
+  await store.storage.recover();
+  assert.equal((await store.list()).length, 2);
+});

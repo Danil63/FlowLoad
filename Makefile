@@ -1,5 +1,10 @@
 .DEFAULT_GOAL := help
 
+.PHONY: storage-check storage-backup storage-recover
+STORE ?=
+WORKSPACE ?= default
+CONFIRM ?= 0
+
 .PHONY: help start setup token init ui web check ping public public-report public-10 public-50 public-100 public-300 auth auth-report auth-dashboard auth-status auth-debug auth-1 auth-5 auth-50 auth-100 route profile flight-once browser browser-dashboard grafana-check public-grafana auth-grafana dist dist-public dist-auth dist-flight k6-check k6-public k6-public-report k6-auth k6-auth-dashboard k6-auth-report k6-auth-status k6-custom-route-report k6-load-profile-report k6-flight-once k6-browser-flight-smoke k6-browser-flight-dashboard k6-grafana k6-distributed
 
 K6_DIR := load-testing/k6
@@ -67,6 +72,10 @@ help:
 	@echo "  make init             Prepare local .env and tokens.txt"
 	@echo "  make web              Open local web UI"
 	@echo "  make ui               Same as make web"
+	@echo "  make storage-check    Проверить каталог и окружения (веб должен быть остановлен)"
+	@echo "  make storage-backup   Создать копии существующих исправных каталогов и реестра"
+	@echo "  make storage-recover STORE=workspaces CONFIRM=1"
+	@echo "  make storage-recover STORE=catalog WORKSPACE=default CONFIRM=1"
 	@echo "  make check            Check k6 installation"
 	@echo "  make ping             Check API host and /health response"
 	@echo "  make public 200       Public read-only with 200 VUs, Russian report"
@@ -126,6 +135,15 @@ ui:
 	@PORT="$(UI_PORT)" node ui/server.mjs
 
 web: ui
+
+storage-check:
+	@node ui/storage-cli.mjs check
+
+storage-backup:
+	@node ui/storage-cli.mjs backup
+
+storage-recover:
+	@FLOWLOAD_STORE="$(STORE)" FLOWLOAD_WORKSPACE="$(WORKSPACE)" FLOWLOAD_CONFIRM="$(CONFIRM)" node ui/storage-cli.mjs recover
 
 init:
 	@test -f $(K6_ENV) || cp $(K6_DIR)/.env.example $(K6_ENV)

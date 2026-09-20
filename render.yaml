@@ -1,6 +1,6 @@
 services:
   - type: web
-    name: big-journey-grafana
+    name: flowload-grafana
     runtime: docker
     plan: 0.5c-512mb
     region: frankfurt
@@ -21,16 +21,16 @@ services:
       - key: PROMETHEUS_HOSTPORT
         fromService:
           type: pserv
-          name: big-journey-prometheus
+          name: flowload-prometheus
           property: hostport
       - key: LOKI_HOSTPORT
         fromService:
           type: pserv
-          name: big-journey-loki
+          name: flowload-loki
           property: hostport
 
   - type: web
-    name: big-journey-k6-gateway
+    name: flowload-k6-gateway
     runtime: docker
     plan: 0.5c-512mb
     region: frankfurt
@@ -43,16 +43,16 @@ services:
       - key: PROMETHEUS_HOSTPORT
         fromService:
           type: pserv
-          name: big-journey-prometheus
+          name: flowload-prometheus
           property: hostport
       - key: LOKI_HOSTPORT
         fromService:
           type: pserv
-          name: big-journey-loki
+          name: flowload-loki
           property: hostport
 
   - type: pserv
-    name: big-journey-prometheus
+    name: flowload-prometheus
     runtime: docker
     plan: 0.5c-512mb
     region: frankfurt
@@ -65,7 +65,7 @@ services:
       sizeGB: 1
 
   - type: pserv
-    name: big-journey-loki
+    name: flowload-loki
     runtime: docker
     plan: 0.5c-512mb
     region: frankfurt

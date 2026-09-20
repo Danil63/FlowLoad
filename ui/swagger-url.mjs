@@ -50,6 +50,7 @@ export async function downloadSwagger(input) {
     reject(new Error('Загрузка заняла больше 15 секунд. Проверь доступность ссылки.'));
   }, { once: true }));
   const download = async () => {
+    let triedDocsJson = false;
     for (let redirects = 0; redirects <= 5; redirects += 1) {
       let response;
       try {
@@ -83,10 +84,18 @@ export async function downloadSwagger(input) {
       }
       const content = Buffer.concat(chunks).toString('utf8');
       if (/text\/html/i.test(response.headers['content-type'] || '') || /^\s*<(?:!doctype|html)/i.test(content)) {
+        if (!triedDocsJson && /\/docs\/?$/.test(url.pathname) && /swagger-ui/i.test(content)) {
+          triedDocsJson = true;
+          url = new URL(url.href);
+          url.pathname = `${url.pathname.replace(/\/$/, '')}-json`;
+          url.hash = '';
+          continue;
+        }
         throw new Error('По ссылке открывается HTML-страница. Укажи JSON/YAML спецификацию, например /docs-json или /openapi.json.');
       }
       return { content, name: url.pathname.split('/').pop() || 'openapi' };
     }
+    throw new Error('Не удалось найти спецификацию после перенаправлений. Укажи прямую ссылку на JSON/YAML.');
   };
   try {
     return await Promise.race([download(), abort]);

@@ -42,7 +42,7 @@ export const options = {
     'checks{scope:auth_read}': ['rate>0.99'],
   },
   tags: {
-    app: 'entreporgneur-big-journey',
+    app: 'flowload',
     environment: 'production',
     test_type: 'auth_game_open',
   },
