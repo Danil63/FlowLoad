@@ -22,7 +22,8 @@ Do not commit real tokens, `.env` files, browser session dumps, or generated rep
 
 The same local UI also has a Swagger/OpenAPI route builder:
 
-1. Upload a `.json`, `.yaml`, or `.yml` Swagger/OpenAPI file.
+1. Upload a `.json`, `.yaml`, or `.yml` Swagger/OpenAPI file, or enter a direct public HTTP(S) specification URL and click "Загрузить по ссылке". For the game, use `https://entreporgneur-big-journey-7b03.twc1.net/docs-json`. HTML Swagger UI pages such as `/docs` are not specification files.
+   URL imports run on your computer, support Swagger 2.0/OpenAPI 3.x, and have a 15-second timeout and a 5 MB download limit. Only public IPv4 destinations are supported; use file import for private-network or IPv6-only specifications. Session tokens are not forwarded to the specification server. Failed imports preserve your current workspace.
 2. Search the method list at the bottom of the board.
 3. Drag methods into the route canvas or select two methods and connect them.
 4. Reorder or remove steps if needed.
@@ -39,6 +40,23 @@ The UI also includes a load profile builder for method-level pressure:
 5. Save the profile locally and run `load profile` from the UI.
 
 Saved load profiles are written to `load-testing/load-profiles/local/` and are ignored by git.
+
+## Workspaces
+
+Use the Workspace selector in the web UI to switch projects. "Новый проект"
+creates an empty project with its own name and API base URL; "Настройки" edits
+these settings. Different projects can be opened in separate browser tabs.
+
+Tokens, Swagger catalogs, saved scenarios, load profiles, reports, and browser
+drafts are isolated by workspace. Existing data stays in "Основной" at its
+original paths. New project data is stored under `ui/.local/workspaces/`, which
+is ignored by git. Browser drafts remain local to the browser.
+
+UI test runs use the selected project's API URL and token file, overriding
+shared Makefile token settings. Only one load test runs at a time across the
+local generator. Terminal commands continue using their existing defaults.
+Token verification still uses the existing game's protected-endpoint check;
+workspace support does not add automatic authentication discovery for other APIs.
 
 ## Useful Commands
 

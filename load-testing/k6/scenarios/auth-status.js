@@ -8,6 +8,7 @@ import { TOKENS } from '../lib/tokens.js';
 const BASE_URL = (__ENV.BASE_URL || 'https://entreporgneur-big-journey-7b03.twc1.net').replace(/\/+$/, '');
 const SESSION_COOKIE_NAME = __ENV.SESSION_COOKIE_NAME || '__Secure-better-auth.session_token';
 const AUTH_STATUS_TIMEOUT = __ENV.AUTH_STATUS_TIMEOUT || '10s';
+const totals = { total: TOKENS.length, completed: 0, accepted: 0, rejected: 0, forbidden: 0, errors: 0 };
 
 const endpoints = [
   ['profile', '/profile'],
@@ -29,8 +30,8 @@ export const options = {
     auth_status: {
       executor: 'shared-iterations',
       vus: 1,
-      iterations: 1,
-      maxDuration: __ENV.AUTH_STATUS_MAX_DURATION || '45s',
+      iterations: Math.max(1, TOKENS.length),
+      maxDuration: __ENV.AUTH_STATUS_MAX_DURATION || `${Math.max(80, TOKENS.length * 80)}s`,
     },
   },
   thresholds: {
@@ -45,16 +46,9 @@ export function setup() {
   }
 }
 
-function summarizeBody(response) {
-  if (!response.body) {
-    return '';
-  }
-
-  return String(response.body).slice(0, 180).replace(/\s+/g, ' ');
-}
-
 export default function () {
-  const token = TOKENS[0];
+  const token = TOKENS[exec.scenario.iterationInTest];
+  const statuses = [];
   const params = {
     headers: {
       Accept: 'application/json',
@@ -72,6 +66,8 @@ export default function () {
       ...params,
       tags: { endpoint: name },
       timeout: AUTH_STATUS_TIMEOUT,
+      redirects: 0,
+      jar: new http.CookieJar(),
     });
 
     endpointDuration[name].add(response.timings.duration);
@@ -85,12 +81,19 @@ export default function () {
       { scope: 'auth_status', endpoint: name },
     );
 
-    const body = summarizeBody(response);
-    const suffix = body ? ` | ${body}` : '';
-    console.log(`${name}: HTTP ${response.status} | ${Math.round(response.timings.duration)} ms${suffix}`);
+    statuses.push(response.status);
+    console.log(`Token #${exec.scenario.iterationInTest + 1} ${name}: HTTP ${response.status}`);
   }
 
-  console.log('');
+  totals.completed += 1;
+  if (statuses.includes(401)) totals.rejected += 1;
+  else if (statuses.includes(403)) totals.forbidden += 1;
+  else if (statuses.every(status => status === 200)) totals.accepted += 1;
+  else totals.errors += 1;
+  const outcome = statuses.includes(401) ? 'rejected' : statuses.includes(403) ? 'forbidden' : statuses.every(status => status === 200) ? 'accepted' : 'errors';
+  const masked = token.length > 12 ? `${token.slice(0, 4)}...${token.slice(-4)}` : '********';
+  console.log(`TOKEN_CHECK_ITEM ${encodeURIComponent(JSON.stringify({ index: exec.scenario.iterationInTest + 1, masked, outcome }))}`);
+  console.log(`TOKEN_CHECK_SUMMARY ${encodeURIComponent(JSON.stringify(totals))}`);
 }
 
 export function handleSummary(data) {

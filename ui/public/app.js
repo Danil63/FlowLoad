@@ -1,29 +1,170 @@
+import { suggestCriticalRoute } from './critical-route.js';
+import { installScenarioDrag } from './scenario-drag.js';
+
+const workspaceId = new URL(window.location.href).searchParams.get('workspace') || 'default';
+let generatorBusy = false;
+let generatorWaitTimer = null;
+function waitForGenerator() {
+  if (generatorWaitTimer) return;
+  generatorWaitTimer = window.setTimeout(async () => {
+    generatorWaitTimer = null;
+    try {
+      const data = await requestJson('/api/status');
+      generatorBusy = data.generatorBusy;
+      updateCustomScenarioControls();
+      if (generatorBusy) waitForGenerator();
+    } catch { waitForGenerator(); }
+  }, 2000);
+}
+let workspaceMetadata = null;
+let editingWorkspace = false;
+const workspaceList = document.querySelector('#workspaceList');
+const workspaceDialog = document.querySelector('#workspaceDialog');
+function openWorkspaceDialog(edit) {
+  editingWorkspace = edit;
+  document.querySelector('#workspaceDialogTitle').textContent = edit ? 'Настройки окружения' : 'Новое окружение';
+  document.querySelector('#workspaceSave').textContent = edit ? 'Сохранить' : 'Создать';
+  document.querySelector('#workspaceName').value = edit ? workspaceMetadata.name : '';
+  document.querySelector('#workspaceBaseUrl').value = edit ? workspaceMetadata.baseUrl : '';
+  document.querySelector('#workspaceError').textContent = '';
+  workspaceDialog.showModal();
+}
+function switchWorkspace(id) {
+  if (id === workspaceId) return;
+  saveWorkspace();
+  saveLoadProfileWorkspace();
+  const url = new URL(window.location.href);
+  url.searchParams.set('workspace', id);
+  window.location.assign(url.href);
+}
+workspaceList.addEventListener('click', event => {
+  const button = event.target.closest('[data-workspace-id]');
+  if (button) switchWorkspace(button.dataset.workspaceId);
+});
+document.querySelector('#workspaceCreate').addEventListener('click', () => openWorkspaceDialog(false));
+document.querySelector('#workspaceEdit').addEventListener('click', () => openWorkspaceDialog(true));
+document.querySelector('#workspaceCancel').addEventListener('click', () => workspaceDialog.close());
+document.querySelector('#workspaceForm').addEventListener('submit', async event => {
+  event.preventDefault();
+  const button = document.querySelector('#workspaceSave');
+  button.disabled = true;
+  try {
+    const data = await requestJson('/api/workspaces', { method: editingWorkspace ? 'PATCH' : 'POST', body: JSON.stringify({
+      name: document.querySelector('#workspaceName').value,
+      baseUrl: document.querySelector('#workspaceBaseUrl').value,
+    }) });
+    if (editingWorkspace) { workspaceDialog.close(); await refresh(); }
+    else switchWorkspace(data.workspace.id);
+  } catch (error) { document.querySelector('#workspaceError').textContent = error.message; }
+  finally { button.disabled = false; }
+});
+
+const pageNames = { environment: 'Окружение', token: 'Токен', routes: 'Сценарии', load: 'Нагрузка' };
+function showPage(focusHeading = false) {
+  const requested = window.location.hash.slice(1);
+  const page = Object.hasOwn(pageNames, requested) ? requested : 'environment';
+  if (page !== requested) history.replaceState(null, '', `#${page}`);
+  document.querySelectorAll('[data-page]').forEach(section => {
+    section.hidden = section.dataset.page !== page;
+  });
+  document.querySelectorAll('[data-nav]').forEach(link => {
+    if (link.dataset.nav === page) link.setAttribute('aria-current', 'page');
+    else link.removeAttribute('aria-current');
+  });
+  const heading = document.querySelector('#pageTitle');
+  heading.textContent = pageNames[page];
+  document.title = `${pageNames[page]} · k6 Load UI`;
+  window.scrollTo(0, 0);
+  if (focusHeading) heading.focus({ preventScroll: true });
+}
+window.addEventListener('hashchange', () => showPage(true));
+showPage();
+
 const statusText = document.querySelector('#statusText');
 const tokenForm = document.querySelector('#tokenForm');
 const tokenInput = document.querySelector('#tokenInput');
 const tokenState = document.querySelector('#tokenState');
+const tokenCheckButton = document.querySelector('#tokenCheckButton');
+const tokenCheckResult = document.querySelector('#tokenCheckResult');
+const tokenDeleteButton = document.querySelector('#tokenDeleteButton');
+let tokenDeletePending = false;
+function resetTokenCheck() {
+  tokenCheckMessage = '';
+  tokenCheckResult.textContent = '';
+  tokenCheckResult.classList.remove('isSuccess');
+  tokenRejectedButton.hidden = true;
+  tokenRejectedList.replaceChildren();
+  tokenRejectedDialog.close();
+  rejectedDialogRunId = null;
+}
+let savedTokensReady = false;
+let tokenCheckMessage = '';
+let rejectedDialogRunId = null;
+const tokenRejectedDialog = document.querySelector('#tokenRejectedDialog');
+const tokenRejectedButton = document.querySelector('#tokenRejectedButton');
+const tokenRejectedList = document.querySelector('#tokenRejectedList');
+tokenRejectedButton.addEventListener('click', () => tokenRejectedDialog.showModal());
+document.querySelector('#tokenRejectedClose').addEventListener('click', () => tokenRejectedDialog.close());
+tokenRejectedDialog.addEventListener('click', event => {
+  const rect = tokenRejectedDialog.getBoundingClientRect();
+  if (event.target === tokenRejectedDialog && (event.clientX < rect.left || event.clientX > rect.right || event.clientY < rect.top || event.clientY > rect.bottom)) tokenRejectedDialog.close();
+});
+
+function renderTokenCheck(run) {
+  const checking = run?.command === 'auth-status' && run.status === 'running';
+  tokenDeleteButton.disabled = tokenDeletePending || !savedTokensReady || run?.status === 'running';
+  tokenInput.disabled = checking;
+  tokenForm.querySelector('button[type="submit"]').disabled = checking;
+  document.querySelector('#tokenFileInput').disabled = checking;
+  document.querySelector('#tokenImportButton').disabled = checking || !document.querySelector('#tokenFileInput').files.length;
+  tokenCheckButton.disabled = !savedTokensReady || run?.status === 'running';
+  tokenCheckButton.textContent = checking ? 'Проверка...' : 'Проверить все токены';
+  if (!savedTokensReady || run?.tokenCheckStale) { resetTokenCheck(); return; }
+  if (run?.command !== 'auth-status') return;
+  const matches = [...(run.output || '').matchAll(/TOKEN_CHECK_RESULT (\{[^\r\n]*?\})/g)];
+  let result = null;
+  try { result = matches.length ? JSON.parse(matches.at(-1)[1]) : null; } catch (_) {}
+  result = run.tokenCheck?.summary || result;
+  const rejected = (run.tokenCheck?.items || []).filter(item => item.outcome === 'rejected');
+  tokenRejectedButton.hidden = checking || !rejected.length;
+  if (!checking && rejected.length) {
+    tokenRejectedList.replaceChildren(...rejected.map(item => {
+      const row = document.createElement('li');
+      row.textContent = `Токен №${item.index}: ${item.masked} — невалиден (401)`;
+      return row;
+    }));
+    if (rejectedDialogRunId !== run.id) {
+      rejectedDialogRunId = run.id;
+      if (!tokenRejectedDialog.open) tokenRejectedDialog.showModal();
+    }
+  }
+  tokenCheckMessage = result
+    ? `Проверено ${result.completed} из ${result.total}. Принято: ${result.accepted}. Отклонено (401): ${result.rejected}. Нет доступа (403): ${result.forbidden}. Ошибки сети/API: ${result.errors}. Ещё не проверено: ${result.total - result.completed}.`
+    : checking ? 'Проверяем сохранённые токены...' : 'Проверка не завершена. Токены не проверены; проверьте доступность API и k6.';
+  if (result && !checking && run.status !== 'passed') tokenCheckMessage += ' Проверка завершена с ошибками или прервана.';
+  tokenCheckResult.textContent = tokenCheckMessage;
+  tokenCheckResult.classList.toggle('isSuccess', run.status === 'passed' && result?.accepted === result?.total && result?.total > 0);
+}
 const runForm = document.querySelector('#runForm');
 const commandSelect = document.querySelector('#commandSelect');
 const usersInput = document.querySelector('#usersInput');
 const routeSelectLabel = document.querySelector('#routeSelectLabel');
 const routeSelect = document.querySelector('#routeSelect');
+const builderRouteSelect = document.querySelector('#builderRouteSelect');
 const profileSelectLabel = document.querySelector('#profileSelectLabel');
 const profileSelect = document.querySelector('#profileSelect');
 const runButton = document.querySelector('#runButton');
 const runBadge = document.querySelector('#runBadge');
 const runOutput = document.querySelector('#runOutput');
 const reportsList = document.querySelector('#reportsList');
-const refreshButton = document.querySelector('#refreshButton');
 const reportsButton = document.querySelector('#reportsButton');
 const swaggerInput = document.querySelector('#swaggerInput');
+const swaggerUrlForm = document.querySelector('#swaggerUrlForm');
+const swaggerUrlInput = document.querySelector('#swaggerUrlInput');
+const swaggerUrlButton = document.querySelector('#swaggerUrlButton');
+const swaggerUrlStatus = document.querySelector('#swaggerUrlStatus');
 const swaggerState = document.querySelector('#swaggerState');
 const openMacSwaggerButton = document.querySelector('#openMacSwaggerButton');
-const macFileBrowser = document.querySelector('#macFileBrowser');
-const macFileBrowserPath = document.querySelector('#macFileBrowserPath');
-const macFileBrowserList = document.querySelector('#macFileBrowserList');
-const macFileBrowserHomeButton = document.querySelector('#macFileBrowserHomeButton');
-const macFileBrowserUpButton = document.querySelector('#macFileBrowserUpButton');
-const closeMacFileBrowserButton = document.querySelector('#closeMacFileBrowserButton');
 const methodSearchInput = document.querySelector('#methodSearchInput');
 const routeNameInput = document.querySelector('#routeNameInput');
 const methodList = document.querySelector('#methodList');
@@ -31,13 +172,17 @@ const methodCount = document.querySelector('#methodCount');
 const routeCanvas = document.querySelector('.routeCanvas');
 const routeSteps = document.querySelector('#routeSteps');
 const addSelectedButton = document.querySelector('#addSelectedButton');
+const criticalRouteButton = document.querySelector('#criticalRouteButton');
 const connectButton = document.querySelector('#connectButton');
 const clearRouteButton = document.querySelector('#clearRouteButton');
 const saveRouteButton = document.querySelector('#saveRouteButton');
 const routesRefreshButton = document.querySelector('#routesRefreshButton');
 const savedRoutesList = document.querySelector('#savedRoutesList');
 const loadProfileState = document.querySelector('#loadProfileState');
-const loadMethodSearchInput = document.querySelector('#loadMethodSearchInput');
+const loadScenarioSelect = document.querySelector('#loadScenarioSelect');
+let loadScenarioFile = '';
+let loadScenarioSteps = [];
+let loadScenarioRequest = 0;
 const loadProfileNameInput = document.querySelector('#loadProfileNameInput');
 const loadChart = document.querySelector('.loadChart');
 const loadTargetsList = document.querySelector('#loadTargetsList');
@@ -46,28 +191,79 @@ const clearLoadProfileButton = document.querySelector('#clearLoadProfileButton')
 const savedLoadProfilesList = document.querySelector('#savedLoadProfilesList');
 
 let pollTimer = null;
+let polledRunId = null;
+let uiRunActive = false;
+let pollingRequestPending = false;
 let endpoints = [];
 let selectedEndpointIds = [];
 let route = [];
+let selectedRouteStep = null;
 let savedRoutes = [];
 let loadProfileTargets = [];
 let savedLoadProfiles = [];
 let expandedLoadTargetKey = null;
-let macFileBrowserCurrentPath = '';
-let macFileBrowserHomePath = '';
-let macFileBrowserParentPath = '';
 
-const workspaceStorageKey = 'bigJourneyK6RouteBuilder';
-const loadProfileStorageKey = 'bigJourneyK6LoadProfileBuilder';
+const workspaceStorageKey = 'bigJourneyK6RouteBuilder' + (workspaceId === 'default' ? '' : `:${workspaceId}`);
+let swaggerCatalog = { sources: [], deleted: [] };
+const swaggerSourceSelect = document.querySelector('#swaggerSourceSelect');
+const deleteSwaggerSource = document.querySelector('#deleteSwaggerSource');
+const swaggerDeleteDialog = document.querySelector('#swaggerDeleteDialog');
+let pendingSwaggerDelete = null;
+function isDeletedMethod(item) {
+  return swaggerCatalog.deleted.some(d => item.catalogMethodId ? d.catalogMethodId === item.catalogMethodId
+    : d.key === `${String(item.method).toUpperCase()} ${item.path}`);
+}
+function invalidAttributes(item) {
+  return item.invalid ? ' class="invalidScenario" title="некоторые методы были удалены"' : '';
+}
+function useCatalog(data) {
+  swaggerCatalog = data;
+  const previous = swaggerSourceSelect.value;
+  endpoints = data.sources.flatMap(source => source.endpoints);
+  swaggerSourceSelect.innerHTML = '<option value="">Все документы</option>' + data.sources.map(source =>
+    `<option value="${escapeHtml(source.id)}">${escapeHtml(source.name)} (${source.endpoints.length})</option>`).join('');
+  if (data.sources.some(source => source.id === previous)) swaggerSourceSelect.value = previous;
+  deleteSwaggerSource.disabled = !swaggerSourceSelect.value;
+  selectedEndpointIds = selectedEndpointIds.filter(id => endpoints.some(e => e.id === id));
+  saveWorkspace();
+  renderMethods();
+  renderRoute();
+}
+function askSwaggerDelete(sourceId, methodId) {
+  pendingSwaggerDelete = { sourceId, methodId };
+  document.querySelector('#swaggerDeleteTitle').textContent = methodId ? 'Удалить метод?' : 'Удалить документ?';
+  document.querySelector('#swaggerDeleteMessage').textContent = methodId
+    ? 'Метод не получится восстановить отдельно. Для повторного добавления потребуется загрузить Swagger заново. Сценарии с этим методом будут недоступны для запуска.'
+    : 'Документ и все его методы будут удалены. Сценарии с этими методами будут недоступны для запуска.';
+  document.querySelector('#swaggerDeleteError').textContent = '';
+  swaggerDeleteDialog.showModal();
+}
+swaggerSourceSelect.addEventListener('change', () => {
+  deleteSwaggerSource.disabled = !swaggerSourceSelect.value;
+  renderMethods();
+});
+deleteSwaggerSource.addEventListener('click', () => askSwaggerDelete(swaggerSourceSelect.value));
+document.querySelector('#swaggerDeleteCancel').addEventListener('click', () => swaggerDeleteDialog.close());
+document.querySelector('#swaggerDeleteConfirm').addEventListener('click', async event => {
+  const button = event.currentTarget;
+  button.disabled = true;
+  try {
+    useCatalog(await requestJson('/api/swagger/catalog', { method: 'DELETE', body: JSON.stringify(pendingSwaggerDelete) }));
+    swaggerDeleteDialog.close();
+    await refresh();
+  } catch (error) { document.querySelector('#swaggerDeleteError').textContent = error.message; }
+  finally { button.disabled = false; }
+});
+const loadProfileStorageKey = 'bigJourneyK6LoadProfileBuilder' + (workspaceId === 'default' ? '' : `:${workspaceId}`);
 const defaultMethodVus = 10;
 const loadScaleMin = 10;
-const loadScaleMax = 1000;
-const loadOverflowSliderValue = 1100;
+const loadScaleMax = 1500;
 const loadGraphHeight = 220;
 const loadGraphTopPad = 18;
 const loadGraphBottomPad = 22;
 const loadColumnWidth = 126;
 const isFileMode = window.location.protocol === 'file:';
+let lifecycleConnection = null;
 
 async function requestJson(url, options = {}) {
   if (isFileMode) {
@@ -75,8 +271,8 @@ async function requestJson(url, options = {}) {
   }
 
   const response = await fetch(url, {
-    headers: { 'Content-Type': 'application/json' },
     ...options,
+    headers: { 'Content-Type': 'application/json', ...options.headers, 'X-Workspace-Id': workspaceId },
   });
   const data = await response.json();
 
@@ -101,7 +297,7 @@ function setBadge(status) {
 
 function renderReports(reports) {
   if (!reports.length) {
-    reportsList.innerHTML = '<p class="muted">Отчетов пока нет</p>';
+    reportsList.innerHTML = '<p class="muted emptyState">Отчетов пока нет</p>';
     return;
   }
 
@@ -164,7 +360,7 @@ function filteredEndpoints() {
 }
 
 function filteredLoadEndpoints() {
-  const query = loadMethodSearchInput.value.trim().toLowerCase();
+  const query = '';
   if (!query) return endpoints;
 
   return endpoints.filter((endpoint) => {
@@ -184,23 +380,24 @@ function filteredLoadEndpoints() {
 }
 
 function updateRouteControls() {
+  criticalRouteButton.disabled = endpoints.length === 0;
   addSelectedButton.disabled = selectedEndpointIds.length !== 1;
   connectButton.disabled = selectedEndpointIds.length !== 2;
   saveRouteButton.disabled = route.length === 0;
 }
 
 function renderMethods() {
-  const visibleEndpoints = filteredEndpoints();
+  const visibleEndpoints = filteredEndpoints().filter(e => !swaggerSourceSelect.value || e.sourceId === swaggerSourceSelect.value);
   methodCount.textContent = `${visibleEndpoints.length} из ${endpoints.length} методов`;
 
   if (!endpoints.length) {
-    methodList.innerHTML = '<p class="muted">Пока нет загруженных методов.</p>';
+    methodList.innerHTML = '<p class="muted emptyState">Пока нет загруженных методов.</p>';
     updateRouteControls();
     return;
   }
 
   if (!visibleEndpoints.length) {
-    methodList.innerHTML = '<p class="muted">Ничего не найдено. Попробуй другой запрос.</p>';
+    methodList.innerHTML = '<p class="muted emptyState">Ничего не найдено. Попробуй другой запрос.</p>';
     updateRouteControls();
     return;
   }
@@ -208,18 +405,19 @@ function renderMethods() {
   methodList.innerHTML = visibleEndpoints
     .map((endpoint) => {
       const selected = selectedEndpointIds.includes(endpoint.id) ? ' selected' : '';
-      const summary = endpoint.summary ? `<p>${escapeHtml(endpoint.summary)}</p>` : '';
+      const summary = endpoint.summary ? `<p title="${escapeHtml(endpoint.summary)}">${escapeHtml(endpoint.summary)}</p>` : '';
       const auth = endpoint.authRequired ? '<span class="metaPill">auth</span>' : '<span class="metaPill">public</span>';
 
-      return `<button class="methodCard${selected}" type="button" draggable="true" data-endpoint-id="${escapeHtml(endpoint.id)}">
+      return `<div class="methodCard${selected}" role="button" tabindex="0" draggable="false" data-endpoint-id="${escapeHtml(endpoint.id)}">
+        <button class="methodDelete" type="button" data-delete-method="${escapeHtml(endpoint.id)}" title="Удалить метод" aria-label="Удалить метод ${escapeHtml(endpoint.method)} ${escapeHtml(endpoint.path)}">×</button>
         <span class="methodCardTop">
           <span class="${methodClass(endpoint.method)}">${escapeHtml(endpoint.method)}</span>
           <span class="risk risk-${escapeHtml(endpoint.risk)}">${escapeHtml(riskLabel(endpoint.risk))}</span>
         </span>
-        <strong>${escapeHtml(endpoint.path)}</strong>
+        <strong title="${escapeHtml(endpoint.path)}">${escapeHtml(endpoint.path)}</strong>
         ${summary}
         <span class="methodMeta">${auth}<span class="metaPill">${escapeHtml(endpoint.tags[0] || 'api')}</span></span>
-      </button>`;
+      </div>`;
     })
     .join('');
 
@@ -227,6 +425,7 @@ function renderMethods() {
 }
 
 function renderRoute() {
+  const previousScrollLeft = routeSteps.scrollLeft;
   if (!route.length) {
     routeSteps.className = 'routeSteps empty';
     routeSteps.textContent = 'Перетащи метод из нижней полки сюда или добавь выбранный метод кнопкой.';
@@ -237,15 +436,16 @@ function renderRoute() {
   routeSteps.className = 'routeSteps';
   routeSteps.innerHTML = route
     .map((step, index) => {
-      const summary = step.summary ? `<p>${escapeHtml(step.summary)}</p>` : '';
+      const summary = step.summary ? `<p title="${escapeHtml(step.summary)}">${escapeHtml(step.summary)}</p>` : '';
       const moveUpDisabled = index === 0 ? ' disabled' : '';
       const moveDownDisabled = index === route.length - 1 ? ' disabled' : '';
 
-      return `<div class="routeStep" draggable="true" data-step-index="${index}">
+      return `<div class="routeStep${selectedRouteStep === step ? ' selected' : ''}" draggable="false" tabindex="0" data-step-index="${index}" aria-label="Шаг ${index + 1}: ${escapeHtml(step.method)} ${escapeHtml(step.path)}">
+        <div class="routeStepSurface${isDeletedMethod(step) ? ' invalidScenario' : ''}"${isDeletedMethod(step) ? ' title="некоторые методы были удалены"' : ''}>
         <div class="routeStepIndex">${index + 1}</div>
         <div class="routeStepBody">
           <span class="${methodClass(step.method)}">${escapeHtml(step.method)}</span>
-          <strong>${escapeHtml(step.path)}</strong>
+          <strong title="${escapeHtml(step.path)}">${escapeHtml(step.path)}</strong>
           ${summary}
         </div>
         <div class="stepActions">
@@ -253,10 +453,13 @@ function renderRoute() {
           <button class="iconButton" type="button" data-action="down" data-index="${index}"${moveDownDisabled} title="Ниже">↓</button>
           <button class="iconButton dangerButton" type="button" data-action="remove" data-index="${index}" title="Удалить">×</button>
         </div>
+        </div>
+        ${index < route.length - 1 ? `<button class="routeInsertArrow" type="button" draggable="false" data-insert-index="${index + 1}" title="Вставить выбранный метод между шагами ${index + 1} и ${index + 2}" aria-label="Вставить между шагами ${index + 1} и ${index + 2}"><span aria-hidden="true"></span></button>` : ''}
       </div>`;
     })
     .join('');
 
+  routeSteps.scrollLeft = previousScrollLeft;
   updateRouteControls();
 }
 
@@ -265,14 +468,14 @@ function renderSavedRoutes(routes = []) {
   renderRouteOptions();
 
   if (!routes.length) {
-    savedRoutesList.innerHTML = '<p class="muted">Сохраненных маршрутов пока нет.</p>';
+    savedRoutesList.innerHTML = '<p class="muted emptyState">Сохраненных сценариев пока нет.</p>';
     return;
   }
 
   savedRoutesList.innerHTML = routes
     .map((savedRoute) => {
       const date = new Date(savedRoute.updatedAt).toLocaleString('ru-RU');
-      return `<div class="savedRoute">
+      return `<div class="savedRoute${savedRoute.invalid ? ' invalidScenario' : ''}"${savedRoute.invalid ? ' title="некоторые методы были удалены"' : ''}>
         <div class="savedRouteInfo">
           <strong>${escapeHtml(savedRoute.name)}</strong>
           <span>${savedRoute.stepsCount} шагов · ${date}</span>
@@ -287,8 +490,24 @@ function renderSavedRoutes(routes = []) {
 }
 
 function renderRouteOptions() {
+  loadScenarioSelect.innerHTML = '<option value="">Выберите сохранённый сценарий</option>' + savedRoutes.map(item => `<option value="${escapeHtml(item.fileName)}"${invalidAttributes(item)}${item.invalid ? ' disabled' : ''}>${escapeHtml(item.name)}${item.invalid ? ' · методы удалены' : ''}</option>`).join('');
+  loadScenarioSelect.disabled = !savedRoutes.length;
+  if (savedRoutes.some(item => item.fileName === loadScenarioFile)) loadScenarioSelect.value = loadScenarioFile;
+  else if (loadScenarioFile) {
+    loadScenarioFile = '';
+    loadScenarioSteps = [];
+    loadProfileTargets = [];
+    saveLoadProfileWorkspace();
+    renderLoadTargets();
+  }
+  renderCustomScenarioOptions();
+  const selectedBuilderRoute = builderRouteSelect.value;
+  builderRouteSelect.innerHTML = `<option value="">${savedRoutes.length ? 'Выбрать сценарий' : 'Нет сохранённых сценариев'}</option>` + savedRoutes
+    .map(item => `<option value="${escapeHtml(item.fileName)}"${invalidAttributes(item)}>${escapeHtml(item.name)} (${item.stepsCount})${item.invalid ? ' · методы удалены' : ''}</option>`).join('');
+  builderRouteSelect.disabled = savedRoutes.length === 0;
+  if (savedRoutes.some(item => item.fileName === selectedBuilderRoute)) builderRouteSelect.value = selectedBuilderRoute;
   if (!savedRoutes.length) {
-    routeSelect.innerHTML = '<option value="">Нет сохраненных маршрутов</option>';
+    routeSelect.innerHTML = '<option value="">Нет сохраненных сценариев</option>';
     routeSelect.disabled = true;
     return;
   }
@@ -305,6 +524,7 @@ function renderRouteOptions() {
 }
 
 function renderLoadProfileOptions() {
+  renderCustomScenarioOptions();
   if (!savedLoadProfiles.length) {
     profileSelect.innerHTML = '<option value="">Нет сохраненных профилей</option>';
     profileSelect.disabled = true;
@@ -325,9 +545,38 @@ function renderLoadProfileOptions() {
   }
 }
 
+function selectedCustomScenario() {
+  return [...savedRoutes.map(item => ({ key: `route:${item.fileName}`, command: 'route', file: item.fileName, name: item.name, invalid: item.invalid })),
+    ...savedLoadProfiles.map(item => ({ key: `profile:${item.fileName}`, command: 'profile', file: item.fileName, name: item.name, invalid: item.invalid }))]
+    .find(item => item.key === commandSelect.value);
+}
+
+function updateCustomScenarioControls() {
+  const selected = selectedCustomScenario();
+  usersInput.disabled = selected?.command !== 'route';
+  routeSelect.classList.add('hidden');
+  routeSelectLabel.classList.add('hidden');
+  profileSelect.classList.add('hidden');
+  profileSelectLabel.classList.add('hidden');
+  runButton.disabled = generatorBusy || uiRunActive || !selected || selected.invalid;
+  runButton.title = selected?.invalid ? 'некоторые методы были удалены' : '';
+}
+
+function renderCustomScenarioOptions() {
+  const previous = commandSelect.value;
+  const group = (label, type, items) => items.length ? `<optgroup label="${label}">${items.map(item => `<option value="${escapeHtml(`${type}:${item.fileName}`)}"${invalidAttributes(item)}${item.invalid ? ' disabled' : ''}>${escapeHtml(item.name)}${item.invalid ? ' · методы удалены' : ''}</option>`).join('')}</optgroup>` : '';
+  commandSelect.innerHTML = '<option value="">' + (savedRoutes.length || savedLoadProfiles.length ? 'Выберите сценарий' : 'Нет сохранённых сценариев') + '</option>'
+    + group('Сценарии', 'route', savedRoutes) + group('Профили нагрузки', 'profile', savedLoadProfiles);
+  commandSelect.disabled = !savedRoutes.length && !savedLoadProfiles.length;
+  if ([...commandSelect.options].some(option => option.value === previous)) commandSelect.value = previous;
+  updateCustomScenarioControls();
+}
+
 function endpointToLoadTarget(endpoint, vus = defaultMethodVus) {
   if (!endpoint) return null;
   return {
+    sourceId: endpoint.sourceId,
+    catalogMethodId: endpoint.catalogMethodId,
     method: endpoint.method,
     path: endpoint.path,
     summary: endpoint.summary,
@@ -345,13 +594,13 @@ function targetKey(target) {
 }
 
 function selectAllLoadTargets(vus = defaultMethodVus) {
-  loadProfileTargets = endpoints.map((endpoint) => endpointToLoadTarget(endpoint, vus)).filter(Boolean);
+  loadProfileTargets = loadScenarioSteps.map((endpoint) => endpointToLoadTarget(endpoint, vus)).filter(Boolean);
   saveLoadProfileWorkspace();
 }
 
 function syncAllLoadTargets() {
   const existingTargets = new Map(loadProfileTargets.map((target) => [targetKey(target), target]));
-  loadProfileTargets = endpoints
+  loadProfileTargets = loadScenarioSteps
     .map((endpoint) => {
       const nextTarget = endpointToLoadTarget(endpoint);
       const existingTarget = existingTargets.get(targetKey(nextTarget));
@@ -367,7 +616,7 @@ function syncAllLoadTargets() {
 }
 
 function ensureDefaultLoadTargets() {
-  if (endpoints.length && loadProfileTargets.length === 0) {
+  if (loadScenarioSteps.length && loadProfileTargets.length === 0) {
     selectAllLoadTargets();
   }
 }
@@ -377,7 +626,7 @@ function loadProfileTotal() {
 }
 
 function matchesLoadQuery(target) {
-  const query = loadMethodSearchInput.value.trim().toLowerCase();
+  const query = '';
   if (!query) return true;
 
   const haystack = [
@@ -398,14 +647,51 @@ function renderLoadMethods() {
   renderLoadTargets();
 }
 
+function loadPointY(weight) {
+  const ratio = (Math.max(loadScaleMin, Math.min(loadScaleMax, weight)) - loadScaleMin) / (loadScaleMax - loadScaleMin);
+  return Math.round(loadGraphTopPad + (1 - ratio) * (loadGraphHeight - loadGraphTopPad - loadGraphBottomPad));
+}
+
+function updateLoadWeight(index, value) {
+  if (!loadProfileTargets[index] || !Number.isFinite(value)) return;
+  loadProfileTargets[index].weight = Math.max(loadScaleMin, Math.min(100000, Math.round(value)));
+  saveLoadProfileWorkspace();
+  refreshLoadValues();
+}
+
+function refreshLoadValues() {
+  const total = loadProfileTotal();
+  const points = [];
+  loadTargetsList.querySelectorAll('[data-load-target-index]').forEach((element, column) => {
+    const target = loadProfileTargets[Number(element.dataset.loadTargetIndex)];
+    const weight = target.weight;
+    element.style.setProperty('--point-top', `${loadPointY(weight)}px`);
+    element.querySelector('.loadPointValue').textContent = weight;
+    element.querySelector('.loadPointDot').title = `${weight} VUs`;
+    const slider = element.querySelector('.loadRange');
+    slider.setAttribute('aria-valuenow', weight);
+    const input = element.querySelector('.loadWeightInput');
+    if (input !== document.activeElement) input.value = weight;
+    element.querySelector('.loadShare').textContent = `${Math.round(weight / total * 100)}% профиля`;
+    points.push(`${column * loadColumnWidth + loadColumnWidth / 2},${loadPointY(weight)}`);
+  });
+  loadTargetsList.querySelector('.loadTrend polyline')?.setAttribute('points', points.join(' '));
+  loadTargetsList.querySelectorAll('[data-load-all]').forEach(button => {
+    button.setAttribute('aria-pressed', String(loadProfileTargets.every(target => target.weight === Number(button.dataset.loadAll))));
+  });
+  loadProfileState.textContent = `${loadProfileTargets.length} методов · всего ${total.toLocaleString('ru-RU')} VUs`;
+}
+
 function renderLoadTargets() {
+  const scrollLeft = loadTargetsList.querySelector('.loadGraphScroller')?.scrollLeft || 0;
   ensureDefaultLoadTargets();
   const total = loadProfileTotal();
   saveLoadProfileButton.disabled = loadProfileTargets.length === 0;
 
   if (!loadProfileTargets.length) {
     loadTargetsList.className = 'loadTargetsList empty';
-    loadTargetsList.textContent = 'Загрузи Swagger, чтобы все методы появились в профиле нагрузки.';
+    loadTargetsList.textContent = 'Выберите сохранённый сценарий.';
+    loadProfileState.textContent = 'Сценарий не выбран';
     return;
   }
 
@@ -421,13 +707,8 @@ function renderLoadTargets() {
   }
 
   const graphWidth = Math.max(loadColumnWidth * visibleTargets.length, 1);
-  const gridLines = [1000, 750, 500, 250, 10];
-  const yForWeight = (weight) => {
-    const clampedWeight = Math.max(loadScaleMin, Math.min(loadScaleMax, Number(weight || loadScaleMin)));
-    const activeHeight = loadGraphHeight - loadGraphTopPad - loadGraphBottomPad;
-    const ratio = (clampedWeight - loadScaleMin) / (loadScaleMax - loadScaleMin);
-    return Math.round(loadGraphTopPad + (1 - ratio) * activeHeight);
-  };
+  const gridLines = [1500, 1250, 1000, 750, 500, 250, 10];
+  const yForWeight = loadPointY;
   const points = visibleTargets
     .map(({ target }, index) => {
       const x = Math.round(index * loadColumnWidth + loadColumnWidth / 2);
@@ -435,7 +716,7 @@ function renderLoadTargets() {
     })
     .join(' ');
   const axis = gridLines
-    .map((value) => `<span class="loadAxisTick" style="top:${yForWeight(value)}px">${value}</span>`)
+    .map((value) => `<button type="button" class="loadAxisTick" style="top:${yForWeight(value)}px" data-load-all="${value}" aria-pressed="${loadProfileTargets.every(target => target.weight === value)}" title="${value} VUs на каждый метод" aria-label="Установить ${value} пользователей на каждый метод">${value}</button>`)
     .join('');
   const grid = gridLines
     .map((value) => `<line x1="0" y1="${yForWeight(value)}" x2="${graphWidth}" y2="${yForWeight(value)}"></line>`)
@@ -444,7 +725,6 @@ function renderLoadTargets() {
     .map(({ target, originalIndex }) => {
       const weight = Number(target.weight || defaultMethodVus);
       const percent = total > 0 ? Math.round((weight / total) * 100) : 0;
-      const sliderValue = weight > loadScaleMax ? loadOverflowSliderValue : Math.max(loadScaleMin, weight);
       const isExpanded = expandedLoadTargetKey === targetKey(target);
       const expandedClass = isExpanded ? ' expanded' : '';
       const summary =
@@ -457,32 +737,39 @@ function renderLoadTargets() {
         <div class="loadPoint">
           <span class="loadPointValue">${weight}</span>
           <span class="loadPointDot" title="${weight} VUs"></span>
-          <input class="loadRange" type="range" min="${loadScaleMin}" max="${loadOverflowSliderValue}" step="10" value="${sliderValue}" data-load-range-index="${originalIndex}" aria-label="VUs для ${escapeHtml(target.method)} ${escapeHtml(target.path)}">
+          <div class="loadRange" role="slider" tabindex="0" aria-orientation="vertical" aria-valuemin="10" aria-valuemax="100000" aria-valuenow="${weight}" data-load-range-index="${originalIndex}" aria-label="VUs для ${escapeHtml(target.method)} ${escapeHtml(target.path)}"></div>
         </div>
-        <div class="loadTargetCard" role="button" tabindex="0" data-load-card-index="${originalIndex}" aria-expanded="${isExpanded}">
+        <div class="loadTargetCard">
+          <button type="button" class="loadTargetToggle" data-load-card-index="${originalIndex}" aria-expanded="${isExpanded}">
           <div class="loadTargetTop">
             <span class="${methodClass(target.method)}">${escapeHtml(target.method)}</span>
           </div>
           <strong>${escapeHtml(target.path)}</strong>
+          </button>
+          <div class="loadManualValue">
+            <input class="loadWeightInput" type="number" min="10" max="100000" step="1" value="${weight}" data-load-weight-index="${originalIndex}" aria-label="Пользователи для ${escapeHtml(target.method)} ${escapeHtml(target.path)}">
+          </div>
           <div class="loadDetails">
             ${summary}
             <span class="loadOperation">${escapeHtml(target.operationId || target.tags[0] || 'api')}</span>
             <span class="loadMetaLine">
               <span>${escapeHtml(auth)}</span>
               <span>${escapeHtml(riskLabel(target.risk))}</span>
-              <span>${percent}% профиля</span>
+              <span class="loadShare">${percent}% профиля</span>
             </span>
-            <label class="loadManualControl">
-              VUs на метод
-              <input class="loadWeightInput" type="number" min="${loadScaleMin}" max="100000" value="${weight}" data-load-weight-index="${originalIndex}">
-            </label>
+            <select data-load-preset-index="${originalIndex}" aria-label="Быстрая нагрузка на ${escapeHtml(target.path)}">
+              <option value="">Выбрать VUs</option>
+              ${[10, 50, 100, 250, 500, 1000, 1500].map(value => `<option value="${value}">${value} VUs</option>`).join('')}
+            </select>
           </div>
         </div>
       </div>`;
     })
     .join('');
 
-  loadTargetsList.innerHTML = `<div class="loadAxis">${axis}</div>
+  loadTargetsList.innerHTML = `<div class="loadRail">
+      <div class="loadAxis">${axis}</div>
+    </div>
     <div class="loadGraphScroller">
       <div class="loadGraphInner" style="width:${graphWidth}px; --load-count:${visibleTargets.length}; --load-column-width:${loadColumnWidth}px">
         <svg class="loadTrend" viewBox="0 0 ${graphWidth} ${loadGraphHeight}" preserveAspectRatio="none" aria-hidden="true">
@@ -492,6 +779,8 @@ function renderLoadTargets() {
         ${targetCards}
       </div>
     </div>`;
+  loadTargetsList.querySelector('.loadGraphScroller').scrollLeft = scrollLeft;
+  loadProfileState.textContent = `${loadProfileTargets.length} методов · всего ${total.toLocaleString('ru-RU')} VUs`;
 }
 
 function renderSavedLoadProfiles(profiles = []) {
@@ -499,7 +788,7 @@ function renderSavedLoadProfiles(profiles = []) {
   renderLoadProfileOptions();
 
   if (!profiles.length) {
-    savedLoadProfilesList.innerHTML = '<p class="muted">Сохраненных профилей пока нет.</p>';
+    savedLoadProfilesList.innerHTML = '<p class="muted emptyState">Сохраненных профилей пока нет.</p>';
     return;
   }
 
@@ -538,6 +827,8 @@ function saveLoadProfileWorkspace() {
     JSON.stringify({
       loadProfileTargets,
       loadProfileName: loadProfileNameInput.value,
+      loadScenarioFile,
+      loadScenarioSteps,
       savedAt: Date.now(),
     }),
   );
@@ -570,7 +861,9 @@ function restoreLoadProfileWorkspace() {
     if (!raw) return;
 
     const saved = JSON.parse(raw);
-    loadProfileTargets = Array.isArray(saved.loadProfileTargets) ? saved.loadProfileTargets : [];
+    loadScenarioFile = saved.loadScenarioFile || '';
+    loadScenarioSteps = Array.isArray(saved.loadScenarioSteps) ? saved.loadScenarioSteps : [];
+    loadProfileTargets = loadScenarioSteps.length && Array.isArray(saved.loadProfileTargets) ? saved.loadProfileTargets : [];
 
     if (saved.loadProfileName) {
       loadProfileNameInput.value = saved.loadProfileName;
@@ -581,9 +874,14 @@ function restoreLoadProfileWorkspace() {
 }
 
 function renderRun(run) {
+  uiRunActive = run?.status === 'running';
+  updateCustomScenarioControls();
+  if (run?.id) polledRunId = run.id;
+  renderTokenCheck(run);
+  if (run?.command === 'auth-status') return;
   if (!run) {
     setBadge('idle');
-    runButton.disabled = false;
+    updateCustomScenarioControls();
     if (!runOutput.textContent) {
       runOutput.textContent = 'Запусков еще не было';
     }
@@ -591,15 +889,39 @@ function renderRun(run) {
   }
 
   setBadge(run.status);
-  runButton.disabled = run.status === 'running';
+  updateCustomScenarioControls();
   runOutput.textContent = run.output || 'Запуск начался...';
   runOutput.scrollTop = runOutput.scrollHeight;
 }
 
 async function refresh() {
+  const projects = await requestJson('/api/workspaces');
+  workspaceList.innerHTML = projects.workspaces.map(item => {
+    const active = item.id === workspaceId;
+    return `<li><button type="button" class="workspaceRow" data-workspace-id="${escapeHtml(item.id)}" aria-pressed="${active}">
+      <span class="workspaceMark" aria-hidden="true">${escapeHtml(item.name.slice(0, 1).toUpperCase())}</span>
+      <span class="workspaceDetails"><strong>${escapeHtml(item.name)}</strong><span>${escapeHtml(item.baseUrl)}</span></span>
+      <span class="workspaceSelection">${active ? 'Выбрано' : 'Выбрать'}</span>
+    </button></li>`;
+  }).join('');
+  document.querySelector('#workspaceCount').textContent = String(projects.workspaces.length);
+  workspaceMetadata = projects.workspaces.find(item => item.id === workspaceId);
+  document.querySelector('#workspaceActiveName').textContent = workspaceMetadata?.name || 'Окружение не найдено';
+  document.querySelector('#workspaceEdit').disabled = !workspaceMetadata;
+  document.querySelector('#workspaceApi').textContent = workspaceMetadata?.baseUrl || '';
+  let catalog = await requestJson('/api/swagger/catalog');
+  if (!catalog.initialized && endpoints.length) {
+    catalog = await requestJson('/api/swagger/catalog', { method: 'POST', body: JSON.stringify({ name: 'Ранее загруженный Swagger', endpoints, migrate: true }) });
+  }
+  useCatalog(catalog);
   const data = await requestJson('/api/status');
-  statusText.textContent = data.tokenReady ? 'Токен сохранен. Можно запускать тесты.' : 'Токен не сохранен.';
-  tokenState.textContent = data.tokenReady ? 'Токен сохранен локально' : 'Токен нужен для auth-сценариев';
+  generatorBusy = data.generatorBusy;
+  if (generatorBusy && !data.activeRunId) waitForGenerator();
+  savedTokensReady = data.tokenReady;
+  statusText.textContent = data.tokenReady ? `Токенов сохранено: ${data.tokenCount}` : 'Токены не добавлены.';
+  tokenState.textContent = data.tokenReady ? `Сохранено локально · ${data.tokenCount} токенов` : 'Токены не добавлены';
+  tokenState.classList.toggle('isSaved', data.tokenReady);
+  document.querySelector('#tokenValidation').textContent = data.tokenReady ? 'Действительность токенов не проверена.' : 'Токены нужны для авторизованных сценариев.';
   renderRun(data.activeRun);
   renderReports(data.reports);
   renderSavedRoutes(data.routes || []);
@@ -617,6 +939,8 @@ async function loadSavedRoute(fileName) {
   routeNameInput.value = savedRoute.name || fileName.replace(/\.route\.json$/, '');
   route = Array.isArray(savedRoute.steps)
     ? savedRoute.steps.map((step) => ({
+        sourceId: step.sourceId,
+        catalogMethodId: step.catalogMethodId,
         method: step.method,
         path: step.path,
         summary: step.summary,
@@ -631,14 +955,37 @@ async function loadSavedRoute(fileName) {
   saveWorkspace();
   renderMethods();
   renderRoute();
-  swaggerState.textContent = `Маршрут "${routeNameInput.value}" открыт в конструкторе.`;
+  swaggerState.textContent = `Сценарий "${routeNameInput.value}" открыт в конструкторе.`;
 }
+
+builderRouteSelect.addEventListener('change', async () => {
+  const fileName = builderRouteSelect.value;
+  if (!fileName) return;
+  builderRouteSelect.disabled = true;
+  try {
+    await loadSavedRoute(fileName);
+    const base = routeNameInput.value;
+    let number = 1;
+    let copyName = `${base}-copy`;
+    while (savedRoutes.some(item => item.name === copyName || item.fileName === `${copyName}.route.json`)) {
+      copyName = `${base}-copy-${++number}`;
+    }
+    routeNameInput.value = copyName;
+    saveWorkspace();
+    swaggerState.textContent = `Сценарий "${base}" загружен. Новая версия: "${copyName}".`;
+  } catch (error) {
+    swaggerState.textContent = error.message;
+    builderRouteSelect.value = '';
+  } finally {
+    builderRouteSelect.disabled = savedRoutes.length === 0;
+  }
+});
 
 async function deleteSavedRoute(fileName) {
   const savedRoute = savedRoutes.find((item) => item.fileName === fileName);
   const name = savedRoute?.name || fileName;
 
-  if (!window.confirm(`Удалить маршрут "${name}"?`)) {
+  if (!window.confirm(`Удалить сценарий "${name}"?`)) {
     return;
   }
 
@@ -647,16 +994,21 @@ async function deleteSavedRoute(fileName) {
     routeSelect.value = '';
   }
   await refresh();
-  swaggerState.textContent = `Маршрут "${name}" удален.`;
+  swaggerState.textContent = `Сценарий "${name}" удален.`;
 }
 
 async function loadSavedLoadProfile(fileName) {
   const data = await requestJson(`/api/load-profiles/${encodeURIComponent(fileName)}`);
   const profile = data.profile;
+  loadScenarioFile = '';
+  loadScenarioSelect.value = '';
+  loadScenarioSteps = Array.isArray(profile.targets) ? profile.targets : [];
 
   loadProfileNameInput.value = profile.name || fileName.replace(/\.load\.json$/, '');
   loadProfileTargets = Array.isArray(profile.targets)
     ? profile.targets.map((target) => ({
+        sourceId: target.sourceId,
+        catalogMethodId: target.catalogMethodId,
         method: target.method,
         path: target.path,
         summary: target.summary,
@@ -690,98 +1042,19 @@ async function deleteSavedLoadProfile(fileName) {
   loadProfileState.textContent = `Профиль "${name}" удален.`;
 }
 
-function applySwaggerData(data, sourceName) {
-  endpoints = data.endpoints;
+async function applySwaggerData(data, sourceName) {
+  const catalog = await requestJson('/api/swagger/catalog', { method: 'POST', body: JSON.stringify({ name: sourceName || data.name, endpoints: data.endpoints }) });
+  useCatalog(catalog);
+  swaggerSourceSelect.value = catalog.sources.at(-1).id;
+  deleteSwaggerSource.disabled = false;
   selectedEndpointIds = [];
-  route = [];
-  loadProfileTargets = [];
-  syncAllLoadTargets();
-  swaggerState.textContent = `${data.title || sourceName}: найдено ${endpoints.length} методов.`;
+  swaggerState.textContent = `${data.title || sourceName}: найдено ${data.endpoints.length} методов.`;
   saveWorkspace();
   renderMethods();
   renderRoute();
   renderLoadMethods();
 }
 
-function clearSwaggerData(errorMessage) {
-  endpoints = [];
-  selectedEndpointIds = [];
-  route = [];
-  loadProfileTargets = [];
-  localStorage.removeItem(workspaceStorageKey);
-  localStorage.removeItem(loadProfileStorageKey);
-  swaggerState.textContent = errorMessage;
-  renderMethods();
-  renderRoute();
-  renderLoadMethods();
-}
-
-function formatFileSize(size) {
-  if (!Number.isFinite(size)) return '';
-  if (size < 1024) return `${size} B`;
-  if (size < 1024 * 1024) return `${Math.round(size / 1024)} KB`;
-  return `${(size / 1024 / 1024).toFixed(1)} MB`;
-}
-
-function displayHomePath(filePath) {
-  if (!filePath) return '~';
-  return macFileBrowserHomePath && filePath.startsWith(macFileBrowserHomePath)
-    ? `~${filePath.slice(macFileBrowserHomePath.length)}`
-    : filePath;
-}
-
-function renderMacFileBrowser(data) {
-  macFileBrowserCurrentPath = data.currentPath || '';
-  macFileBrowserHomePath = data.homePath || macFileBrowserHomePath;
-  macFileBrowserParentPath = data.parentPath || '';
-  macFileBrowserPath.textContent = displayHomePath(macFileBrowserCurrentPath);
-  macFileBrowserUpButton.disabled = !macFileBrowserParentPath;
-
-  if (!data.items.length) {
-    macFileBrowserList.innerHTML = '<p class="muted">В этой папке нет Swagger/OpenAPI файлов.</p>';
-    return;
-  }
-
-  macFileBrowserList.innerHTML = data.items
-    .map((item) => {
-      const icon = item.type === 'directory' ? 'Папка' : 'Файл';
-      const meta = item.type === 'directory' ? 'папка' : formatFileSize(item.size);
-      return `<button class="fileBrowserItem" type="button" data-file-type="${escapeHtml(item.type)}" data-file-path="${escapeHtml(item.path)}">
-        <span>${icon}</span>
-        <strong>${escapeHtml(item.name)}</strong>
-        <small>${escapeHtml(meta)}</small>
-      </button>`;
-    })
-    .join('');
-}
-
-async function openMacFileBrowser(dir = '') {
-  macFileBrowser.classList.remove('hidden');
-  macFileBrowserList.innerHTML = '<p class="muted">Читаю папку...</p>';
-
-  try {
-    const query = dir ? `?dir=${encodeURIComponent(dir)}` : '';
-    const data = await requestJson(`/api/local-files${query}`);
-    renderMacFileBrowser(data);
-  } catch (error) {
-    macFileBrowserList.innerHTML = `<p class="muted">${escapeHtml(error.message)}</p>`;
-  }
-}
-
-async function loadLocalSwagger(filePath) {
-  swaggerState.textContent = `Читаю ${displayHomePath(filePath)}...`;
-
-  try {
-    const data = await requestJson('/api/swagger/local', {
-      method: 'POST',
-      body: JSON.stringify({ path: filePath }),
-    });
-    applySwaggerData(data, data.name || displayHomePath(filePath));
-    macFileBrowser.classList.add('hidden');
-  } catch (error) {
-    clearSwaggerData(error.message);
-  }
-}
 
 function toggleEndpointSelection(endpointId) {
   if (selectedEndpointIds.includes(endpointId)) {
@@ -796,6 +1069,8 @@ function toggleEndpointSelection(endpointId) {
 function endpointToRouteStep(endpoint) {
   if (!endpoint) return;
   return {
+    sourceId: endpoint.sourceId,
+    catalogMethodId: endpoint.catalogMethodId,
     method: endpoint.method,
     path: endpoint.path,
     summary: endpoint.summary,
@@ -853,6 +1128,8 @@ function moveRouteStepTo(fromIndex, toIndex) {
 }
 
 function dropIndexFromEvent(event) {
+  const insertion = event.target.closest('[data-insert-index]');
+  if (insertion) return Number(insertion.dataset.insertIndex);
   const step = event.target.closest('.routeStep');
   if (!step) return route.length;
 
@@ -862,6 +1139,8 @@ function dropIndexFromEvent(event) {
 }
 
 function clearDragState() {
+  setInsertionPreview(null);
+  document.querySelectorAll('.routeInsertArrow.dropTarget').forEach(element => element.classList.remove('dropTarget'));
   routeCanvas.classList.remove('dragOver');
   loadChart.classList.remove('dragOver');
   document.querySelectorAll('.dragging').forEach((element) => {
@@ -871,8 +1150,11 @@ function clearDragState() {
 
 function startPolling() {
   pollTimer = window.setInterval(async () => {
+    if (pollingRequestPending) return;
+    pollingRequestPending = true;
     try {
-      const data = await requestJson('/api/run/current');
+      const data = await requestJson(`/api/run/${encodeURIComponent(polledRunId || 'current')}`, { signal: AbortSignal.timeout(10000) });
+      if (!data.run) throw new Error('Результат запуска недоступен. Возможно, локальный сервер был перезапущен.');
       renderRun(data.run);
       if (!data.run || data.run.status !== 'running') {
         window.clearInterval(pollTimer);
@@ -880,7 +1162,14 @@ function startPolling() {
         await refresh();
       }
     } catch (error) {
+      window.clearInterval(pollTimer);
+      pollTimer = null;
+      tokenCheckResult.textContent = `Не удалось получить результат проверки: ${error.message}. Обновите страницу браузера.`;
+      tokenCheckResult.classList.remove('isSuccess');
       runOutput.textContent += `\n${error.message}`;
+      renderTokenCheck(null);
+    } finally {
+      pollingRequestPending = false;
     }
   }, 1000);
 }
@@ -895,22 +1184,105 @@ tokenForm.addEventListener('submit', async (event) => {
       body: JSON.stringify({ token }),
     });
     tokenInput.value = '';
+    tokenCheckMessage = '';
+    tokenRejectedButton.hidden = true;
+    tokenRejectedList.replaceChildren();
+    tokenCheckResult.textContent = '';
+    tokenCheckResult.classList.remove('isSuccess');
     await refresh();
   } catch (error) {
+    tokenState.classList.remove('isSaved');
     tokenState.textContent = error.message;
+  }
+});
+
+const tokenFileInput = document.querySelector('#tokenFileInput');
+tokenDeleteButton.addEventListener('click', async () => {
+  if (tokenDeleteButton.disabled) return;
+  tokenDeletePending = true;
+  tokenDeleteButton.disabled = true;
+  try {
+    await requestJson('/api/token', { method: 'DELETE' });
+    savedTokensReady = false;
+    tokenInput.value = '';
+    tokenFileInput.value = '';
+    tokenImportButton.disabled = true;
+    tokenImportStatus.textContent = 'Сохранённые токены удалены.';
+    resetTokenCheck();
+    await refresh();
+  } catch (error) {
+    tokenImportStatus.textContent = error.message;
+  } finally {
+    tokenDeletePending = false;
+    tokenDeleteButton.disabled = !savedTokensReady || uiRunActive;
+  }
+});
+tokenCheckButton.addEventListener('click', async () => {
+  tokenRejectedButton.hidden = true;
+  tokenCheckButton.disabled = true;
+  tokenCheckResult.textContent = 'Запускаем проверку...';
+  tokenCheckResult.classList.remove('isSuccess');
+  try {
+    const data = await requestJson('/api/run', { method: 'POST', body: JSON.stringify({ command: 'auth-status' }) });
+    renderRun(data.run);
+    if (!pollTimer) startPolling();
+  } catch (error) {
+    tokenCheckResult.textContent = error.message;
+    tokenCheckButton.disabled = !savedTokensReady;
+  }
+});
+const tokenHelpDialog = document.querySelector('#tokenHelpDialog');
+document.querySelector('#tokenHelpButton').addEventListener('click', () => tokenHelpDialog.showModal());
+document.querySelector('#tokenHelpClose').addEventListener('click', () => tokenHelpDialog.close());
+tokenHelpDialog.addEventListener('click', event => {
+  const bounds = tokenHelpDialog.getBoundingClientRect();
+  if (event.target === tokenHelpDialog && (event.clientX < bounds.left || event.clientX > bounds.right || event.clientY < bounds.top || event.clientY > bounds.bottom)) {
+    tokenHelpDialog.close();
+  }
+});
+const tokenImportButton = document.querySelector('#tokenImportButton');
+const tokenImportStatus = document.querySelector('#tokenImportStatus');
+tokenFileInput.addEventListener('change', () => {
+  tokenImportButton.disabled = !tokenFileInput.files.length;
+  tokenImportStatus.textContent = '';
+});
+tokenImportButton.addEventListener('click', async () => {
+  const file = tokenFileInput.files[0];
+  if (!file) return;
+  tokenImportButton.disabled = true;
+  tokenImportStatus.textContent = 'Сохранение...';
+  try {
+    if (file.size > 1024 * 1024) throw new Error('Файл должен быть не больше 1 МБ');
+    await requestJson('/api/token', { method: 'POST', body: JSON.stringify({ content: await file.text() }) });
+    tokenFileInput.value = '';
+    tokenInput.value = '';
+    tokenImportStatus.textContent = 'Файл импортирован';
+    tokenRejectedButton.hidden = true;
+    tokenRejectedList.replaceChildren();
+    tokenCheckMessage = '';
+    tokenCheckResult.textContent = '';
+    tokenCheckResult.classList.remove('isSuccess');
+    await refresh();
+  } catch (error) {
+    tokenImportStatus.textContent = error.message;
+  } finally {
+    tokenImportButton.disabled = !tokenFileInput.files.length;
   }
 });
 
 runForm.addEventListener('submit', async (event) => {
   event.preventDefault();
-  const command = commandSelect.value;
+  const selected = selectedCustomScenario();
+  if (!selected) { runOutput.textContent = 'Выберите сохранённый сценарий.'; return; }
+  if (selected.invalid) { runOutput.textContent = 'Некоторые методы были удалены.'; return; }
+  const command = selected.command;
   const users = usersInput.value.trim();
-  const routeFile = routeSelect.value;
-  const profileFile = profileSelect.value;
+  const routeFile = command === 'route' ? selected.file : '';
+  const profileFile = command === 'profile' ? selected.file : '';
 
   try {
     if (command === 'route' && !routeFile) {
-      throw new Error('Выбери сохраненный маршрут для запуска.');
+      throw new Error('Выбери сохраненный сценарий для запуска.');
     }
 
     if (command === 'profile' && !profileFile) {
@@ -929,16 +1301,9 @@ runForm.addEventListener('submit', async (event) => {
 });
 
 commandSelect.addEventListener('change', () => {
-  const routeMode = commandSelect.value === 'route';
-  const profileMode = commandSelect.value === 'profile';
-  usersInput.disabled = !['public', 'auth', 'route'].includes(commandSelect.value);
-  routeSelect.classList.toggle('hidden', !routeMode);
-  routeSelectLabel.classList.toggle('hidden', !routeMode);
-  profileSelect.classList.toggle('hidden', !profileMode);
-  profileSelectLabel.classList.toggle('hidden', !profileMode);
+  updateCustomScenarioControls();
 });
 
-refreshButton.addEventListener('click', refresh);
 reportsButton.addEventListener('click', refresh);
 routesRefreshButton.addEventListener('click', refresh);
 
@@ -989,70 +1354,140 @@ swaggerInput.addEventListener('change', async () => {
       body: JSON.stringify({ name: file.name, content }),
     });
 
-    applySwaggerData(data, file.name);
+    await applySwaggerData(data, file.name);
   } catch (error) {
-    clearSwaggerData(error.message);
+    swaggerState.textContent = error.message;
   } finally {
     swaggerInput.value = '';
   }
 });
 
 openMacSwaggerButton.addEventListener('click', () => {
-  openMacFileBrowser();
+  swaggerInput.click();
 });
 
-closeMacFileBrowserButton.addEventListener('click', () => {
-  macFileBrowser.classList.add('hidden');
-});
-
-macFileBrowserHomeButton.addEventListener('click', () => {
-  openMacFileBrowser(macFileBrowserHomePath);
-});
-
-macFileBrowserUpButton.addEventListener('click', () => {
-  if (macFileBrowserParentPath) {
-    openMacFileBrowser(macFileBrowserParentPath);
+swaggerUrlForm.addEventListener('submit', async (event) => {
+  event.preventDefault();
+  if (swaggerUrlButton.disabled) return;
+  swaggerUrlButton.disabled = true;
+  openMacSwaggerButton.disabled = true;
+  swaggerInput.disabled = true;
+  swaggerUrlForm.setAttribute('aria-busy', 'true');
+  swaggerUrlButton.textContent = 'Загрузка...';
+  swaggerUrlStatus.textContent = 'Загрузка документа...';
+  try {
+    const data = await requestJson('/api/swagger/url', {
+      method: 'POST',
+      body: JSON.stringify({ url: swaggerUrlInput.value.trim() }),
+    });
+    await applySwaggerData(data, data.name);
+    swaggerUrlStatus.textContent = `Загружено методов: ${data.endpoints.length}.`;
+  } catch (error) {
+    swaggerUrlStatus.textContent = error.message;
+  } finally {
+    swaggerUrlButton.disabled = false;
+    openMacSwaggerButton.disabled = false;
+    swaggerInput.disabled = false;
+    swaggerUrlForm.removeAttribute('aria-busy');
+    swaggerUrlButton.textContent = 'Загрузить по ссылке';
   }
 });
 
-macFileBrowserList.addEventListener('click', (event) => {
-  const item = event.target.closest('[data-file-path]');
-  if (!item) return;
-
-  const filePath = item.dataset.filePath;
-  if (item.dataset.fileType === 'directory') {
-    openMacFileBrowser(filePath);
-  } else {
-    loadLocalSwagger(filePath);
-  }
-});
 
 methodSearchInput.addEventListener('input', renderMethods);
-loadMethodSearchInput.addEventListener('input', renderLoadMethods);
+loadScenarioSelect.addEventListener('change', async () => {
+  const request = ++loadScenarioRequest;
+  loadScenarioFile = loadScenarioSelect.value;
+  loadScenarioSteps = [];
+  loadProfileTargets = [];
+  renderLoadTargets();
+  saveLoadProfileWorkspace();
+  if (!loadScenarioFile) return;
+  loadProfileState.textContent = 'Загрузка сценария...';
+  try {
+    const data = await requestJson(`/api/routes/${encodeURIComponent(loadScenarioFile)}`);
+    if (request !== loadScenarioRequest) return;
+    loadScenarioSteps = (data.route.steps || []).map(step => ({ ...step, tags: step.tags || [] }));
+    loadProfileNameInput.value = `${data.route.name}-load`;
+    selectAllLoadTargets();
+    renderLoadTargets();
+    loadProfileState.textContent = `${loadProfileTargets.length} методов · всего ${loadProfileTotal()} VUs`;
+    commandSelect.value = '';
+    updateCustomScenarioControls();
+  } catch (error) {
+    if (request === loadScenarioRequest) loadProfileState.textContent = error.message;
+  }
+});
 
 methodList.addEventListener('click', (event) => {
+  const remove = event.target.closest('[data-delete-method]');
+  if (remove) {
+    const endpoint = selectedEndpoint(remove.dataset.deleteMethod);
+    if (endpoint) askSwaggerDelete(endpoint.sourceId, endpoint.catalogMethodId);
+    return;
+  }
   const card = event.target.closest('[data-endpoint-id]');
   if (!card) return;
 
+  selectedRouteStep = null;
   toggleEndpointSelection(card.dataset.endpointId);
+  renderRoute();
+});
+methodList.addEventListener('keydown', event => {
+  if (event.target.matches('[data-endpoint-id]') && ['Enter', ' '].includes(event.key)) {
+    event.preventDefault();
+    event.target.click();
+  }
 });
 
-methodList.addEventListener('dragstart', (event) => {
-  const card = event.target.closest('[data-endpoint-id]');
-  if (!card) return;
-
-  event.dataTransfer.effectAllowed = 'copy';
-  event.dataTransfer.setData('application/x-endpoint-id', card.dataset.endpointId);
-  card.classList.add('dragging');
+const scenarioDrag = installScenarioDrag({
+  shelf: methodList,
+  board: routeSteps,
+  canvas: routeCanvas,
+  resolveSource(card) {
+    if (card.dataset.endpointId) {
+      const endpoint = selectedEndpoint(card.dataset.endpointId);
+      return endpoint ? { endpoint } : null;
+    }
+    const step = route[Number(card.dataset.stepIndex)];
+    return step ? { step } : null;
+  },
+  insert(source, index) {
+    if (source.endpoint) addEndpointToRoute(source.endpoint, index);
+    else {
+      const from = route.indexOf(source.step);
+      if (from < 0) return;
+      moveRouteStepTo(from, index);
+    }
+    selectedRouteStep = null;
+    selectedEndpointIds = [];
+    renderMethods();
+    renderRoute();
+  },
 });
-
-methodList.addEventListener('dragend', clearDragState);
 
 addSelectedButton.addEventListener('click', () => {
   addEndpointToRoute(selectedEndpoint(selectedEndpointIds[0]));
   selectedEndpointIds = [];
   renderMethods();
   renderRoute();
+});
+
+criticalRouteButton.addEventListener('click', () => {
+  const suggestion = suggestCriticalRoute(endpoints);
+  if (!suggestion.steps.length) {
+    swaggerState.textContent = `Критический путь открытия игры не определён: отсутствуют GET ${suggestion.missing.join(', GET ')}. Текущий сценарий сохранён.`;
+    return;
+  }
+  if (route.length && !window.confirm('Заменить текущий сценарий критическим путём открытия игры?')) return;
+  route = suggestion.steps.map(endpointToRouteStep);
+  routeNameInput.value = 'critical-game-open';
+  selectedEndpointIds = [];
+  saveWorkspace();
+  renderMethods();
+  renderRoute();
+  const missing = suggestion.missing.length ? ` Недоступные шаги: ${suggestion.missing.join(', ')}.` : '';
+  swaggerState.textContent = `Открытие игры: ${route.length} шагов. Используется готовая сессия; вход через Яндекс и полёт не включены.${missing}`;
 });
 
 connectButton.addEventListener('click', () => {
@@ -1062,55 +1497,59 @@ connectButton.addEventListener('click', () => {
   renderRoute();
 });
 
-routeCanvas.addEventListener('dragover', (event) => {
-  const types = Array.from(event.dataTransfer.types);
-  if (!types.includes('application/x-endpoint-id') && !types.includes('application/x-route-step-index')) {
+function setInsertionPreview(arrow) {
+  if (scenarioDrag.isDragging()) return;
+  document.querySelectorAll('.insertionPreview').forEach(element => element.classList.remove('insertionPreview'));
+  if (!arrow) return;
+  const sourceIndex = route.indexOf(selectedRouteStep);
+  let source = sourceIndex >= 0 ? routeSteps.querySelector(`[data-step-index="${sourceIndex}"]`) : null;
+  if (!source && selectedEndpointIds.length === 1) {
+    source = [...methodList.querySelectorAll('[data-endpoint-id]')].find(card => card.dataset.endpointId === selectedEndpointIds[0]);
+  }
+  if (!source) source = document.querySelector('.dragging');
+  if (source) {
+    source.classList.add('insertionPreview');
+    arrow.classList.add('insertionPreview');
+  }
+}
+routeSteps.addEventListener('pointerover', event => setInsertionPreview(event.target.closest('[data-insert-index]')));
+routeSteps.addEventListener('pointerout', event => setInsertionPreview(event.relatedTarget instanceof Element ? event.relatedTarget.closest('[data-insert-index]') : null));
+routeSteps.addEventListener('focusin', event => setInsertionPreview(event.target.closest('[data-insert-index]')));
+routeSteps.addEventListener('focusout', () => setInsertionPreview(null));
+
+routeSteps.addEventListener('click', (event) => {
+  setInsertionPreview(null);
+  const insertion = event.target.closest('[data-insert-index]');
+  if (insertion) {
+    const target = Number(insertion.dataset.insertIndex);
+    const source = route.indexOf(selectedRouteStep);
+    if (source >= 0) moveRouteStepTo(source, target);
+    else if (selectedEndpointIds.length === 1) {
+      addEndpointToRoute(selectedEndpoint(selectedEndpointIds[0]), target);
+      selectedEndpointIds = [];
+      renderMethods();
+    } else {
+      swaggerState.textContent = 'Выберите один метод, затем нажмите стрелку между шагами.';
+      return;
+    }
+    selectedRouteStep = null;
+    renderRoute();
+    return;
+  }
+  const button = event.target.closest('[data-action]');
+  if (!button) {
+    const card = event.target.closest('[data-step-index]');
+    if (!card) return;
+    const step = route[Number(card.dataset.stepIndex)];
+    selectedRouteStep = selectedRouteStep === step ? null : step;
+    selectedEndpointIds = [];
+    renderMethods();
+    routeSteps.querySelectorAll('[data-step-index]').forEach(element => element.classList.toggle('selected', route[Number(element.dataset.stepIndex)] === selectedRouteStep));
     return;
   }
 
-  event.preventDefault();
-  routeCanvas.classList.add('dragOver');
-  event.dataTransfer.dropEffect = types.includes('application/x-endpoint-id') ? 'copy' : 'move';
-});
-
-routeCanvas.addEventListener('dragleave', (event) => {
-  if (!routeCanvas.contains(event.relatedTarget)) {
-    routeCanvas.classList.remove('dragOver');
-  }
-});
-
-routeCanvas.addEventListener('drop', (event) => {
-  event.preventDefault();
-  const endpointId = event.dataTransfer.getData('application/x-endpoint-id');
-  const routeStepIndex = event.dataTransfer.getData('application/x-route-step-index');
-  const targetIndex = dropIndexFromEvent(event);
-
-  if (endpointId) {
-    addEndpointToRoute(selectedEndpoint(endpointId), targetIndex);
-    renderRoute();
-  } else if (routeStepIndex !== '') {
-    moveRouteStepTo(Number(routeStepIndex), targetIndex);
-  }
-
-  clearDragState();
-});
-
-routeSteps.addEventListener('dragstart', (event) => {
-  const step = event.target.closest('.routeStep');
-  if (!step || event.target.closest('button')) return;
-
-  event.dataTransfer.effectAllowed = 'move';
-  event.dataTransfer.setData('application/x-route-step-index', step.dataset.stepIndex);
-  step.classList.add('dragging');
-});
-
-routeSteps.addEventListener('dragend', clearDragState);
-
-routeSteps.addEventListener('click', (event) => {
-  const button = event.target.closest('[data-action]');
-  if (!button) return;
-
   const index = Number(button.dataset.index);
+  selectedRouteStep = null;
   if (button.dataset.action === 'remove') {
     route.splice(index, 1);
     saveWorkspace();
@@ -1126,35 +1565,37 @@ routeSteps.addEventListener('click', (event) => {
   }
 });
 
-loadTargetsList.addEventListener('input', (event) => {
-  const range = event.target.closest('[data-load-range-index]');
-  if (!range) return;
-
-  const index = Number(range.dataset.loadRangeIndex);
-  const value = Number(range.value || defaultMethodVus);
-
-  if (value > loadScaleMax) {
-    loadProfileTargets[index].weight = Math.max(loadOverflowSliderValue, Number(loadProfileTargets[index].weight || loadOverflowSliderValue));
-  } else {
-    loadProfileTargets[index].weight = Math.max(loadScaleMin, value);
+routeSteps.addEventListener('keydown', event => {
+  if ((event.key === 'Enter' || event.key === ' ') && event.target.matches('.routeStep')) {
+    event.preventDefault();
+    event.target.click();
   }
+});
 
-  saveLoadProfileWorkspace();
-  renderLoadTargets();
+loadTargetsList.addEventListener('input', (event) => {
+  const input = event.target.closest('[data-load-weight-index]');
+  if (input && input.value !== '' && input.validity.valid) {
+    updateLoadWeight(Number(input.dataset.loadWeightIndex), Number(input.value));
+  }
 });
 
 loadTargetsList.addEventListener('change', (event) => {
-  const input = event.target.closest('[data-load-weight-index]');
-  if (!input) return;
-
-  const index = Number(input.dataset.loadWeightIndex);
-  const value = Math.max(loadScaleMin, Math.min(100000, Number(input.value || defaultMethodVus)));
-  loadProfileTargets[index].weight = value;
-  saveLoadProfileWorkspace();
-  renderLoadTargets();
+  const preset = event.target.closest('[data-load-preset-index]');
+  if (preset?.value) {
+    updateLoadWeight(Number(preset.dataset.loadPresetIndex), Number(preset.value));
+    preset.value = '';
+  }
 });
 
 loadTargetsList.addEventListener('click', (event) => {
+  const bulk = event.target.closest('[data-load-all]');
+  if (bulk) {
+    const value = Number(bulk.dataset.loadAll);
+    loadProfileTargets.forEach(target => { target.weight = value; });
+    saveLoadProfileWorkspace();
+    refreshLoadValues();
+    return;
+  }
   if (event.target.closest('input, label')) return;
 
   const card = event.target.closest('[data-load-card-index]');
@@ -1167,13 +1608,24 @@ loadTargetsList.addEventListener('click', (event) => {
 });
 
 loadTargetsList.addEventListener('keydown', (event) => {
+  const slider = event.target.closest('[data-load-range-index]');
+  if (slider) {
+    const index = Number(slider.dataset.loadRangeIndex);
+    const changes = { ArrowUp: 10, ArrowRight: 10, ArrowDown: -10, ArrowLeft: -10, PageUp: 100, PageDown: -100 };
+    if (event.key in changes || ['Home', 'End'].includes(event.key)) {
+      event.preventDefault();
+      const value = event.key === 'Home' ? loadScaleMin : event.key === 'End' ? loadScaleMax : loadProfileTargets[index].weight + changes[event.key];
+      updateLoadWeight(index, value);
+    }
+    return;
+  }
   const input = event.target.closest('[data-load-weight-index]');
   if (input && event.key === 'Enter') {
     input.blur();
     return;
   }
 
-  if (!['Enter', ' '].includes(event.key) || event.target.closest('input')) return;
+  if (!['Enter', ' '].includes(event.key) || event.target.closest('input, button, select')) return;
 
   const card = event.target.closest('[data-load-card-index]');
   if (!card) return;
@@ -1190,13 +1642,32 @@ loadTargetsList.addEventListener('focusout', (event) => {
   if (!input) return;
 
   const index = Number(input.dataset.loadWeightIndex);
-  const value = Math.max(loadScaleMin, Math.min(100000, Number(input.value || defaultMethodVus)));
-  if (loadProfileTargets[index].weight !== value) {
-    loadProfileTargets[index].weight = value;
-    saveLoadProfileWorkspace();
-    renderLoadTargets();
-  }
+  const value = input.value === '' ? loadProfileTargets[index].weight : Number(input.value);
+  updateLoadWeight(index, value);
+  input.value = loadProfileTargets[index].weight;
 });
+
+let loadPointer = null;
+function moveLoadPoint(event) {
+  if (!loadPointer || event.pointerId !== loadPointer.id) return;
+  const { slider, index } = loadPointer;
+  const y = event.clientY - slider.getBoundingClientRect().top;
+  const ratio = 1 - (y - loadGraphTopPad) / (loadGraphHeight - loadGraphTopPad - loadGraphBottomPad);
+  const value = Math.round((loadScaleMin + Math.max(0, Math.min(1, ratio)) * (loadScaleMax - loadScaleMin)) / 10) * 10;
+  updateLoadWeight(index, value);
+}
+loadTargetsList.addEventListener('pointerdown', (event) => {
+  const slider = event.target.closest('[data-load-range-index]');
+  if (!slider || event.button !== 0) return;
+  event.preventDefault();
+  slider.focus();
+  slider.setPointerCapture(event.pointerId);
+  loadPointer = { slider, index: Number(slider.dataset.loadRangeIndex), id: event.pointerId };
+  moveLoadPoint(event);
+});
+loadTargetsList.addEventListener('pointermove', moveLoadPoint);
+loadTargetsList.addEventListener('pointerup', () => { loadPointer = null; });
+loadTargetsList.addEventListener('pointercancel', () => { loadPointer = null; });
 
 clearRouteButton.addEventListener('click', () => {
   route = [];
@@ -1225,8 +1696,9 @@ saveRouteButton.addEventListener('click', async () => {
       body: JSON.stringify({ name, steps: route }),
     });
 
-    swaggerState.textContent = `Маршрут "${data.route.name}" сохранен: ${data.route.stepsCount} шагов.`;
+    swaggerState.textContent = `Сценарий "${data.route.name}" сохранен: ${data.route.stepsCount} шагов.`;
     await refresh();
+    builderRouteSelect.value = data.route.fileName;
   } catch (error) {
     swaggerState.textContent = error.message;
   }
@@ -1243,6 +1715,8 @@ saveLoadProfileButton.addEventListener('click', async () => {
 
     loadProfileState.textContent = `Профиль "${data.profile.name}" сохранен: ${data.profile.targetsCount} методов, ${data.profile.totalWeight} VUs.`;
     await refresh();
+    commandSelect.value = `profile:${data.profile.fileName}`;
+    updateCustomScenarioControls();
   } catch (error) {
     loadProfileState.textContent = error.message;
   }
@@ -1251,7 +1725,7 @@ saveLoadProfileButton.addEventListener('click', async () => {
 commandSelect.dispatchEvent(new Event('change'));
 restoreWorkspace();
 restoreLoadProfileWorkspace();
-if (endpoints.length) {
+if (loadScenarioSteps.length) {
   syncAllLoadTargets();
 }
 renderMethods();
@@ -1263,6 +1737,7 @@ if (isFileMode) {
   runOutput.textContent = 'Закрой эту вкладку file:// и запусти: make ui';
   runButton.disabled = true;
 } else {
+  lifecycleConnection = new EventSource('/api/lifecycle');
   refresh().catch((error) => {
     statusText.textContent = error.message;
   });

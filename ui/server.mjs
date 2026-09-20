@@ -4,21 +4,23 @@ import { spawn } from 'node:child_process';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import YAML from 'yaml';
+import { downloadSwagger } from './swagger-url.mjs';
+import { Workspaces } from './workspaces.mjs';
+import { AsyncLocalStorage } from 'node:async_hooks';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const rootDir = path.resolve(__dirname, '..');
 const publicDir = path.join(__dirname, 'public');
-const k6Dir = path.join(rootDir, 'load-testing', 'k6');
-const tokensFile = path.join(k6Dir, 'tokens.txt');
-const resultsDir = path.join(k6Dir, 'results');
-const routesDir = path.join(rootDir, 'load-testing', 'routes', 'local');
-const loadProfilesDir = path.join(rootDir, 'load-testing', 'load-profiles', 'local');
+const workspaces = new Workspaces(rootDir);
+const workspaceContext = new AsyncLocalStorage();
+const workspace = () => workspaceContext.getStore();
 const port = Number(process.env.PORT || 8787);
-const homeDir = path.resolve(process.env.HOME || process.env.USERPROFILE || rootDir);
-const swaggerFileExtensions = new Set(['.json', '.yaml', '.yml']);
 
 const runs = new Map();
 let activeRunId = null;
+const lifecycleClients = new Set();
+let lifecycleClientSeen = false;
+let shutdownTimer = null;
 
 const allowedRuns = {
   ping: { args: ['ping'], users: false },
@@ -46,6 +48,49 @@ function notFound(res) {
   json(res, 404, { error: 'Not found' });
 }
 
+function cancelScheduledShutdown() {
+  if (!shutdownTimer) return;
+  clearTimeout(shutdownTimer);
+  shutdownTimer = null;
+}
+
+function scheduleShutdownWhenUnused() {
+  cancelScheduledShutdown();
+  if (!lifecycleClientSeen || lifecycleClients.size > 0) return;
+
+  shutdownTimer = setTimeout(() => {
+    shutdownTimer = null;
+    if (lifecycleClients.size > 0) return;
+
+    if (activeRunId) {
+      console.log('Browser closed. Waiting for the active test to finish...');
+      return;
+    }
+
+    console.log('Browser closed. Stopping local UI.');
+    server.close(() => process.exit(0));
+    server.closeIdleConnections?.();
+  }, 2000);
+}
+
+function connectLifecycleClient(req, res) {
+  lifecycleClientSeen = true;
+  cancelScheduledShutdown();
+  lifecycleClients.add(res);
+
+  res.writeHead(200, {
+    'Content-Type': 'text/event-stream; charset=utf-8',
+    'Cache-Control': 'no-cache, no-transform',
+    Connection: 'keep-alive',
+  });
+  res.write('event: ready\ndata: connected\n\n');
+
+  req.on('close', () => {
+    lifecycleClients.delete(res);
+    scheduleShutdownWhenUnused();
+  });
+}
+
 function contentType(filePath) {
   if (filePath.endsWith('.html')) return 'text/html; charset=utf-8';
   if (filePath.endsWith('.css')) return 'text/css; charset=utf-8';
@@ -53,21 +98,6 @@ function contentType(filePath) {
   return 'application/octet-stream';
 }
 
-function isSwaggerFileName(fileName) {
-  return swaggerFileExtensions.has(path.extname(fileName).toLowerCase());
-}
-
-async function resolveHomePath(inputPath = '') {
-  const requestedPath = inputPath ? path.resolve(homeDir, inputPath) : homeDir;
-  const realHome = await fs.realpath(homeDir);
-  const realPath = await fs.realpath(requestedPath);
-
-  if (realPath !== realHome && !realPath.startsWith(`${realHome}${path.sep}`)) {
-    throw new Error('Path must be inside the Mac user folder');
-  }
-
-  return realPath;
-}
 
 async function readBody(req) {
   const chunks = [];
@@ -177,7 +207,7 @@ function routePathForName(fileName) {
     throw new Error('Route file must end with .route.json');
   }
 
-  return path.join(routesDir, safeName);
+  return path.join(workspace().routesDir, safeName);
 }
 
 function loadProfilePathForName(fileName) {
@@ -186,7 +216,7 @@ function loadProfilePathForName(fileName) {
     throw new Error('Load profile file must end with .load.json');
   }
 
-  return path.join(loadProfilesDir, safeName);
+  return path.join(workspace().loadProfilesDir, safeName);
 }
 
 async function readRouteFile(fileName) {
@@ -203,19 +233,20 @@ async function readLoadProfileFile(fileName) {
 
 async function listRoutes() {
   try {
-    const entries = await fs.readdir(routesDir, { withFileTypes: true });
+    const entries = await fs.readdir(workspace().routesDir, { withFileTypes: true });
     const routes = [];
 
     for (const entry of entries) {
       if (!entry.isFile() || !entry.name.endsWith('.route.json')) continue;
 
-      const fullPath = path.join(routesDir, entry.name);
+      const fullPath = path.join(workspace().routesDir, entry.name);
       const [raw, stat] = await Promise.all([fs.readFile(fullPath, 'utf8'), fs.stat(fullPath)]);
       const route = JSON.parse(raw);
       routes.push({
         name: route.name || entry.name.replace(/\.route\.json$/, ''),
         fileName: entry.name,
         stepsCount: Array.isArray(route.steps) ? route.steps.length : 0,
+        invalid: await workspace().swaggerCatalog.invalid(route.steps || []),
         updatedAt: stat.mtimeMs,
       });
     }
@@ -229,13 +260,13 @@ async function listRoutes() {
 
 async function listLoadProfiles() {
   try {
-    const entries = await fs.readdir(loadProfilesDir, { withFileTypes: true });
+    const entries = await fs.readdir(workspace().loadProfilesDir, { withFileTypes: true });
     const profiles = [];
 
     for (const entry of entries) {
       if (!entry.isFile() || !entry.name.endsWith('.load.json')) continue;
 
-      const fullPath = path.join(loadProfilesDir, entry.name);
+      const fullPath = path.join(workspace().loadProfilesDir, entry.name);
       const [raw, stat] = await Promise.all([fs.readFile(fullPath, 'utf8'), fs.stat(fullPath)]);
       const profile = JSON.parse(raw);
       const targets = Array.isArray(profile.targets) ? profile.targets : [];
@@ -245,6 +276,7 @@ async function listLoadProfiles() {
         name: profile.name || entry.name.replace(/\.load\.json$/, ''),
         fileName: entry.name,
         targetsCount: targets.length,
+        invalid: await workspace().swaggerCatalog.invalid(targets),
         totalWeight,
         updatedAt: stat.mtimeMs,
       });
@@ -257,31 +289,33 @@ async function listLoadProfiles() {
   }
 }
 
-async function hasRealTokens() {
+function parseTokens(raw) {
+  return [...new Set(raw.split(/\r?\n|,/).map(value => value.trim())
+    .filter(value => value && !value.startsWith('#') && !value.startsWith('example-token-')))];
+}
+
+async function countTokens() {
   try {
-    const raw = await fs.readFile(tokensFile, 'utf8');
-    return raw
-      .split(/\r?\n|,/)
-      .map((value) => value.trim())
-      .some((value) => value && !value.startsWith('#') && !value.startsWith('example-token-'));
+    const raw = await fs.readFile(workspace().tokensFile, 'utf8');
+    return parseTokens(raw).length;
   } catch (_error) {
-    return false;
+    return 0;
   }
 }
 
 async function listReports() {
   try {
-    const entries = await fs.readdir(resultsDir, { withFileTypes: true });
+    const entries = await fs.readdir(workspace().resultsDir, { withFileTypes: true });
     const reports = [];
 
     for (const entry of entries) {
       if (!entry.isFile() || !entry.name.endsWith('.html')) continue;
 
-      const fullPath = path.join(resultsDir, entry.name);
+      const fullPath = path.join(workspace().resultsDir, entry.name);
       const stat = await fs.stat(fullPath);
       reports.push({
         name: entry.name,
-        url: `/reports/${encodeURIComponent(entry.name)}`,
+        url: `/reports/${encodeURIComponent(entry.name)}?workspace=${encodeURIComponent(workspace().id)}`,
         createdAt: stat.mtimeMs,
       });
     }
@@ -294,17 +328,20 @@ async function listReports() {
 }
 
 async function handleStatus(_req, res) {
-  const [tokenReady, reports, routes, loadProfiles] = await Promise.all([
-    hasRealTokens(),
+  const [tokenCount, reports, routes, loadProfiles] = await Promise.all([
+    countTokens(),
     listReports(),
     listRoutes(),
     listLoadProfiles(),
   ]);
   json(res, 200, {
     rootDir,
-    tokenReady,
-    activeRunId,
-    activeRun: activeRunId ? runs.get(activeRunId) : null,
+    tokenReady: tokenCount > 0,
+    tokenCount,
+    workspace: { id: workspace().id, name: workspace().name, baseUrl: workspace().baseUrl },
+    generatorBusy: Boolean(activeRunId),
+    activeRunId: runs.get(activeRunId)?.workspaceId === workspace().id ? activeRunId : null,
+    activeRun: runs.get(activeRunId)?.workspaceId === workspace().id ? runs.get(activeRunId) : null,
     reports,
     routes,
     loadProfiles,
@@ -312,20 +349,43 @@ async function handleStatus(_req, res) {
 }
 
 async function saveToken(req, res) {
+  if (activeRunId) {
+    json(res, 409, { error: 'Дождитесь завершения проверки или нагрузки перед изменением токенов.' });
+    return;
+  }
   const body = await readBody(req);
-  const token = String(body.token || '').trim();
+  const raw = body.content ?? body.token;
+  if (typeof raw !== 'string' || Buffer.byteLength(raw, 'utf8') > 1024 * 1024) {
+    json(res, 400, { error: 'Ожидается текст до 1 МБ' });
+    return;
+  }
+  const tokens = parseTokens(raw);
 
-  if (!token) {
-    json(res, 400, { error: 'Token is required' });
+  if (!tokens.length || tokens.some(token => /[\s;\x00-\x1f\x7f]/.test(token))) {
+    json(res, 400, { error: 'Укажи значения токенов: один на строку, без имени cookie и пробелов' });
     return;
   }
 
-  await fs.mkdir(k6Dir, { recursive: true });
-  await fs.writeFile(tokensFile, `# Local session tokens. Do not commit this file.\n# One token per line.\n${token}\n`, {
+  await fs.mkdir(workspace().k6Dir, { recursive: true });
+  await fs.writeFile(workspace().tokensFile, `# Local session tokens. Do not commit this file.\n# One token per line.\n${tokens.join('\n')}\n`, {
     mode: 0o600,
   });
-  await fs.chmod(tokensFile, 0o600).catch(() => {});
+  await fs.chmod(workspace().tokensFile, 0o600).catch(() => {});
+  for (const run of runs.values()) if (run.workspaceId === workspace().id && run.command === 'auth-status') run.tokenCheckStale = true;
   json(res, 200, { ok: true });
+}
+
+async function deleteTokens(_req, res) {
+  if (activeRunId) {
+    json(res, 409, { error: 'Дождитесь завершения проверки или нагрузки перед удалением токенов.' });
+    return;
+  }
+  // Keep an empty token file so consumers do not fail on a missing path.
+  await fs.mkdir(workspace().k6Dir, { recursive: true });
+  await fs.writeFile(workspace().tokensFile, '', { mode: 0o600 });
+  await fs.chmod(workspace().tokensFile, 0o600);
+  for (const run of runs.values()) if (run.workspaceId === workspace().id && run.command === 'auth-status') run.tokenCheckStale = true;
+  json(res, 200, { ok: true, tokenCount: 0, tokenReady: false });
 }
 
 async function parseSwagger(req, res) {
@@ -342,71 +402,26 @@ async function parseSwagger(req, res) {
   });
 }
 
-async function listLocalFiles(req, res, url) {
-  const currentPath = await resolveHomePath(url.searchParams.get('dir') || '');
-  const realHome = await fs.realpath(homeDir);
-  const entries = await fs.readdir(currentPath, { withFileTypes: true });
-  const items = [];
-
-  for (const entry of entries) {
-    if (entry.name.startsWith('.')) continue;
-
-    const fullPath = path.join(currentPath, entry.name);
-    if (entry.isDirectory()) {
-      items.push({
-        type: 'directory',
-        name: entry.name,
-        path: fullPath,
-      });
-      continue;
+async function parseSwaggerUrl(req, res) {
+  try {
+    const body = await readBody(req);
+    const { content, name } = await downloadSwagger(body.url);
+    let document;
+    try {
+      document = parseDocument(content);
+    } catch {
+      throw new Error('Документ содержит некорректный JSON или YAML.');
     }
-
-    if (entry.isFile() && isSwaggerFileName(entry.name)) {
-      const stat = await fs.stat(fullPath);
-      items.push({
-        type: 'file',
-        name: entry.name,
-        path: fullPath,
-        size: stat.size,
-      });
+    if (!document || !(document.swagger === '2.0' || /^3\./.test(String(document.openapi || '')))) {
+      throw new Error('Нужна спецификация Swagger 2.0 или OpenAPI 3.x.');
     }
+    const endpoints = extractEndpoints(document);
+    json(res, 200, { ok: true, name, title: document.info?.title || '', version: document.info?.version || '', endpoints });
+  } catch (error) {
+    json(res, 400, { error: error.message });
   }
-
-  items.sort((a, b) => {
-    if (a.type !== b.type) return a.type === 'directory' ? -1 : 1;
-    return a.name.localeCompare(b.name, 'ru');
-  });
-
-  json(res, 200, {
-    homePath: realHome,
-    currentPath,
-    parentPath: currentPath === realHome ? null : path.dirname(currentPath),
-    items,
-  });
 }
 
-async function parseLocalSwagger(req, res) {
-  const body = await readBody(req);
-  const filePath = await resolveHomePath(String(body.path || ''));
-
-  if (!isSwaggerFileName(filePath)) {
-    json(res, 400, { error: 'Choose a .json, .yaml, or .yml Swagger/OpenAPI file' });
-    return;
-  }
-
-  const content = await fs.readFile(filePath, 'utf8');
-  const document = parseDocument(content);
-  const endpoints = extractEndpoints(document);
-
-  json(res, 200, {
-    ok: true,
-    name: path.basename(filePath),
-    path: filePath,
-    title: document.info?.title || '',
-    version: document.info?.version || '',
-    endpoints,
-  });
-}
 
 async function saveRoute(req, res) {
   const body = await readBody(req);
@@ -428,6 +443,8 @@ async function saveRoute(req, res) {
     createdAt: new Date().toISOString(),
     steps: steps.map((step, index) => ({
       order: index + 1,
+      sourceId: String(step.sourceId || ''),
+      catalogMethodId: String(step.catalogMethodId || ''),
       method: String(step.method || '').toUpperCase(),
       path: String(step.path || ''),
       summary: String(step.summary || ''),
@@ -439,9 +456,9 @@ async function saveRoute(req, res) {
     })),
   };
 
-  await fs.mkdir(routesDir, { recursive: true });
+  await fs.mkdir(workspace().routesDir, { recursive: true });
   const fileName = `${slugify(name)}.route.json`;
-  const routePath = path.join(routesDir, fileName);
+  const routePath = path.join(workspace().routesDir, fileName);
   await fs.writeFile(routePath, `${JSON.stringify(route, null, 2)}\n`, { mode: 0o600 });
   await fs.chmod(routePath, 0o600).catch(() => {});
 
@@ -472,6 +489,8 @@ async function saveLoadProfile(req, res) {
 
   const normalizedTargets = targets.map((target, index) => ({
     order: index + 1,
+    sourceId: String(target.sourceId || ''),
+    catalogMethodId: String(target.catalogMethodId || ''),
     method: String(target.method || '').toUpperCase(),
     path: String(target.path || ''),
     summary: String(target.summary || ''),
@@ -494,9 +513,9 @@ async function saveLoadProfile(req, res) {
     targets: normalizedTargets,
   };
 
-  await fs.mkdir(loadProfilesDir, { recursive: true });
+  await fs.mkdir(workspace().loadProfilesDir, { recursive: true });
   const fileName = `${slugify(name)}.load.json`;
-  const profilePath = path.join(loadProfilesDir, fileName);
+  const profilePath = path.join(workspace().loadProfilesDir, fileName);
   await fs.writeFile(profilePath, `${JSON.stringify(profile, null, 2)}\n`, { mode: 0o600 });
   await fs.chmod(profilePath, 0o600).catch(() => {});
 
@@ -551,6 +570,7 @@ function createRun(command, args, extraEnv = {}) {
   const id = `${Date.now()}-${Math.random().toString(16).slice(2)}`;
   const run = {
     id,
+    workspaceId: workspace().id,
     command,
     args,
     status: 'running',
@@ -558,6 +578,7 @@ function createRun(command, args, extraEnv = {}) {
     finishedAt: null,
     exitCode: null,
     output: '',
+    tokenCheck: command === 'auth-status' ? { items: [], summary: null } : null,
   };
 
   runs.set(id, run);
@@ -568,11 +589,26 @@ function createRun(command, args, extraEnv = {}) {
     env: {
       ...process.env,
       ...extraEnv,
-      OPEN_REPORT: 'true',
+      OPEN_REPORT: command === 'auth-status' ? 'false' : 'true',
     },
   });
 
+  let checkBuffer = '';
   const append = (chunk) => {
+    if (run.tokenCheck) {
+      checkBuffer += chunk.toString();
+      const lines = checkBuffer.split('\n');
+      checkBuffer = lines.pop();
+      for (const line of lines) {
+        const match = line.match(/TOKEN_CHECK_(ITEM|SUMMARY) ([A-Za-z0-9%_.!~*'()-]+)/);
+        if (!match) continue;
+        try {
+          const data = JSON.parse(decodeURIComponent(match[2]));
+          if (match[1] === 'SUMMARY') run.tokenCheck.summary = data;
+          else run.tokenCheck.items.push(data);
+        } catch (_) {}
+      }
+    }
     run.output += chunk.toString();
     if (run.output.length > 120000) {
       run.output = run.output.slice(-120000);
@@ -588,6 +624,7 @@ function createRun(command, args, extraEnv = {}) {
     if (activeRunId === id) {
       activeRunId = null;
     }
+    scheduleShutdownWhenUnused();
   });
 
   child.on('error', (error) => {
@@ -598,6 +635,7 @@ function createRun(command, args, extraEnv = {}) {
     if (activeRunId === id) {
       activeRunId = null;
     }
+    scheduleShutdownWhenUnused();
   });
 
   return run;
@@ -605,13 +643,17 @@ function createRun(command, args, extraEnv = {}) {
 
 async function startRun(req, res) {
   if (activeRunId) {
-    json(res, 409, { error: 'A test is already running', run: runs.get(activeRunId) });
+    json(res, 409, { error: 'Генератор занят: дождитесь завершения текущего теста.' });
     return;
   }
 
   const body = await readBody(req);
   const command = String(body.command || '').trim();
   const config = allowedRuns[command];
+  if (workspace().id !== 'default' && !['route', 'profile', 'auth-status'].includes(command)) {
+    json(res, 400, { error: 'В этом проекте доступны только собственные сценарии и проверка токенов.' });
+    return;
+  }
 
   if (!config) {
     json(res, 400, { error: 'Unknown command' });
@@ -619,6 +661,9 @@ async function startRun(req, res) {
   }
 
   const args = [...config.args];
+  if (command === 'auth-status') {
+    args.push('SESSION_TOKEN_FOR_K6=', 'SESSION_TOKENS_FOR_K6=', `TOKENS_FILE=${workspace().tokensFile}`);
+  }
   const users = String(body.users || '').trim();
   const extraEnv = {};
 
@@ -640,6 +685,10 @@ async function startRun(req, res) {
 
     const routePath = routePathForName(routeFileName);
     await fs.access(routePath);
+    if (await workspace().swaggerCatalog.invalid(JSON.parse(await fs.readFile(routePath, 'utf8')).steps || [])) {
+      json(res, 409, { error: 'Некоторые методы были удалены. Исправьте сценарий перед запуском.' });
+      return;
+    }
     extraEnv.CUSTOM_ROUTE_FILE = routePath;
   }
 
@@ -652,16 +701,27 @@ async function startRun(req, res) {
 
     const profilePath = loadProfilePathForName(profileFileName);
     await fs.access(profilePath);
+    if (await workspace().swaggerCatalog.invalid(JSON.parse(await fs.readFile(profilePath, 'utf8')).targets || [])) {
+      json(res, 409, { error: 'Некоторые методы были удалены. Исправьте профиль перед запуском.' });
+      return;
+    }
     extraEnv.CUSTOM_LOAD_PROFILE_FILE = profilePath;
   }
 
+  // Command-line make assignments override the shared .env and Makefile defaults.
+  if (activeRunId) {
+    json(res, 409, { error: 'Генератор занят: дождитесь завершения текущего теста.' });
+    return;
+  }
+  args.push(`BASE_URL=${workspace().baseUrl}`, `TOKENS_FILE=${workspace().tokensFile}`,
+    `K6_RESULTS=${workspace().resultsDir}`, 'SESSION_TOKEN_FOR_K6=', 'SESSION_TOKENS_FOR_K6=');
   const run = createRun(command, args, extraEnv);
   json(res, 202, { run });
 }
 
 async function getRun(req, res, runId) {
   const run = runId === 'current' && activeRunId ? runs.get(activeRunId) : runs.get(runId);
-  if (!run) {
+  if (!run || run.workspaceId !== workspace().id) {
     json(res, 200, { run: null });
     return;
   }
@@ -676,7 +736,7 @@ async function serveReport(req, res, name) {
     return;
   }
 
-  const reportPath = path.join(resultsDir, reportName);
+  const reportPath = path.join(workspace().resultsDir, reportName);
   try {
     await fs.access(reportPath);
     res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
@@ -705,17 +765,51 @@ async function serveStatic(req, res) {
   }
 }
 
-const server = createServer(async (req, res) => {
+async function handleRequest(req, res) {
   try {
     const url = new URL(req.url, `http://127.0.0.1:${port}`);
+    if (url.pathname === '/api/workspaces') {
+      if (req.method === 'GET') json(res, 200, { workspaces: await workspaces.list() });
+      else if (req.method === 'POST' || req.method === 'PATCH') {
+        if (req.method === 'PATCH' && runs.get(activeRunId)?.workspaceId === workspace().id) {
+          json(res, 409, { error: 'Настройки проекта нельзя менять во время теста.' });
+          return;
+        }
+        try {
+          json(res, 200, { workspace: await workspaces.save(await readBody(req), req.method === 'PATCH' ? workspace().id : undefined) });
+        } catch (error) { json(res, 400, { error: error.message }); }
+      } else json(res, 405, { error: 'Method not allowed' });
+      return;
+    }
 
     if (req.method === 'GET' && url.pathname === '/api/status') {
       await handleStatus(req, res);
       return;
     }
 
+    if (req.method === 'GET' && url.pathname === '/api/lifecycle') {
+      connectLifecycleClient(req, res);
+      return;
+    }
+
     if (req.method === 'POST' && url.pathname === '/api/token') {
       await saveToken(req, res);
+      return;
+    }
+    if (req.method === 'DELETE' && url.pathname === '/api/token') {
+      await deleteTokens(req, res);
+      return;
+    }
+
+    if (url.pathname === '/api/swagger/catalog') {
+      if (req.method === 'GET') json(res, 200, await workspace().swaggerCatalog.read());
+      else if (req.method === 'POST') {
+        const body = await readBody(req);
+        json(res, 200, await workspace().swaggerCatalog.add(body.name, body.endpoints, body.migrate === true));
+      } else if (req.method === 'DELETE') {
+        const body = await readBody(req);
+        json(res, 200, await workspace().swaggerCatalog.remove(body.sourceId, body.methodId));
+      } else json(res, 405, { error: 'Method not allowed' });
       return;
     }
 
@@ -724,15 +818,11 @@ const server = createServer(async (req, res) => {
       return;
     }
 
-    if (req.method === 'GET' && url.pathname === '/api/local-files') {
-      await listLocalFiles(req, res, url);
+    if (req.method === 'POST' && url.pathname === '/api/swagger/url') {
+      await parseSwaggerUrl(req, res);
       return;
     }
 
-    if (req.method === 'POST' && url.pathname === '/api/swagger/local') {
-      await parseLocalSwagger(req, res);
-      return;
-    }
 
     if (req.method === 'GET' && url.pathname === '/api/routes') {
       json(res, 200, { routes: await listRoutes() });
@@ -798,6 +888,15 @@ const server = createServer(async (req, res) => {
   } catch (error) {
     json(res, 500, { error: error.message });
   }
+}
+
+const server = createServer(async (req, res) => {
+  try {
+    const url = new URL(req.url, 'http://localhost');
+    const id = req.headers['x-workspace-id'] || url.searchParams.get('workspace') || 'default';
+    const current = await workspaces.get(id);
+    await workspaceContext.run(current, () => handleRequest(req, res));
+  } catch (error) { json(res, 404, { error: error.message }); }
 });
 
 function openBrowser(url) {

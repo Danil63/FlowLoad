@@ -7,16 +7,33 @@
   <link rel="stylesheet" href="./styles.css">
 </head>
 <body>
+  <nav class="sideNav" aria-label="Разделы приложения">
+    <a class="navSquare" href="#environment" data-nav="environment" aria-current="page" title="Окружение">Окружение</a>
+    <a class="navSquare" href="#token" data-nav="token" title="Токен">Токен</a>
+    <a class="navSquare" href="#routes" data-nav="routes" title="Сценарии">Сценарии</a>
+    <a class="navSquare" href="#load" data-nav="load" title="Нагрузка">Нагрузка</a>
+  </nav>
   <main class="shell">
     <section class="topbar">
       <div>
-        <h1>k6 Load UI</h1>
+        <h1 id="pageTitle" tabindex="-1">Окружение</h1>
         <p id="statusText">Проверка окружения...</p>
       </div>
-      <button id="refreshButton" type="button">Обновить</button>
     </section>
 
-    <section class="grid">
+    <section class="appPage environmentPage" data-page="environment" aria-label="Окружение">
+      <div class="environmentHeading">
+        <div><span class="environmentEyebrow">Выбрано</span><h2 id="workspaceActiveName">Загрузка...</h2><span id="workspaceApi" class="muted"></span></div>
+        <div class="workspaceActions">
+          <button id="workspaceEdit" class="ghost" type="button" disabled>Настройки</button>
+          <button id="workspaceCreate" type="button">Создать окружение</button>
+        </div>
+      </div>
+      <div class="environmentListHeading"><h2>Мои окружения</h2><span id="workspaceCount" class="muted"></span></div>
+      <ul id="workspaceList" class="workspaceList" aria-label="Сохранённые окружения"><li class="muted">Загрузка...</li></ul>
+    </section>
+
+    <section class="appPage tokenPage" data-page="token" aria-label="Токен">
       <form id="tokenForm" class="panel">
         <h2>Токен</h2>
         <label for="tokenInput">SESSION_TOKEN</label>
@@ -24,73 +41,68 @@
           <input id="tokenInput" type="password" autocomplete="off" placeholder="Вставь токен сессии">
           <button type="submit">Сохранить</button>
         </div>
-        <p id="tokenState" class="muted">Токен не проверен</p>
-      </form>
-
-      <form id="runForm" class="panel">
-        <h2>Запуск</h2>
-        <label for="commandSelect">Сценарий</label>
-        <select id="commandSelect">
-          <option value="public">public</option>
-          <option value="auth">auth</option>
-          <option value="route">saved route</option>
-          <option value="profile">load profile</option>
-          <option value="auth-status">auth-status</option>
-          <option value="auth-1">auth-1</option>
-          <option value="auth-5">auth-5</option>
-          <option value="auth-50">auth-50</option>
-          <option value="browser">browser</option>
-          <option value="ping">ping</option>
-        </select>
-
-        <label for="usersInput">Пользователи</label>
-        <input id="usersInput" type="number" min="1" max="10000" value="10">
-
-        <label id="routeSelectLabel" class="hidden" for="routeSelect">Маршрут</label>
-        <select id="routeSelect" class="hidden"></select>
-
-        <label id="profileSelectLabel" class="hidden" for="profileSelect">Профиль нагрузки</label>
-        <select id="profileSelect" class="hidden"></select>
-
-        <button id="runButton" type="submit">Запустить</button>
+        <div class="tokenImport">
+          <div class="tokenImportHeading">
+            <label for="tokenFileInput">Файл токенов (.txt, до 1 МБ)</label>
+            <button id="tokenHelpButton" class="infoButton" type="button" aria-label="Формат файла токенов" aria-haspopup="dialog" aria-controls="tokenHelpDialog" title="Формат файла токенов"><span aria-hidden="true">i</span></button>
+          </div>
+          <div class="tokenFileActions">
+            <input id="tokenFileInput" type="file" accept=".txt,text/plain">
+            <button id="tokenDeleteButton" class="ghost dangerButton" type="button" disabled>Удалить токены</button>
+          </div>
+          <p class="muted">Один токен на строку. Сохранение заменит текущий набор.</p>
+          <button id="tokenImportButton" type="button" disabled>Импортировать</button>
+          <p id="tokenImportStatus" role="status" aria-live="polite"></p>
+        </div>
+        <p id="tokenState" class="tokenStatus" role="status" aria-live="polite">Токены не добавлены</p>
+        <p id="tokenValidation" class="muted"></p>
+        <section class="tokenVerification" aria-labelledby="tokenVerificationTitle">
+          <h3 id="tokenVerificationTitle">Проверка токенов</h3>
+          <button id="tokenCheckButton" type="button" disabled>Проверить все токены</button>
+          <p class="muted">Последовательная проверка всех сохранённых токенов на защищённых методах API игры.</p>
+          <p id="tokenCheckResult" role="status" aria-live="polite"></p>
+          <button id="tokenRejectedButton" type="button" hidden>Невалидные токены</button>
+        </section>
       </form>
     </section>
 
-    <section class="panel routeBuilder">
+
+
+    <section class="panel routeBuilder appPage" data-page="routes" aria-label="Сценарии" hidden>
       <div class="sectionHead">
         <div>
-          <h2>Конструктор маршрута</h2>
-          <p id="swaggerState" class="muted">Загрузи Swagger/OpenAPI файл, чтобы собрать маршрут из методов.</p>
+          <h2>Конструктор сценария</h2>
+          <p id="swaggerState" class="muted">Загрузи Swagger/OpenAPI файл, чтобы собрать сценарий из методов.</p>
         </div>
         <div class="swaggerActions">
-          <button id="openMacSwaggerButton" class="fileButton" type="button">Загрузить Swagger</button>
-          <label class="ghost fileFallbackButton" for="swaggerInput">Через Finder</label>
+          <button id="openMacSwaggerButton" class="fileButton" type="button">Загрузить файл</button>
         </div>
         <input id="swaggerInput" class="visuallyHidden" type="file" accept=".json,.yaml,.yml,application/json,text/yaml,text/x-yaml">
       </div>
 
-      <div id="macFileBrowser" class="fileBrowser hidden">
-        <div class="fileBrowserHead">
-          <div>
-            <strong>Выбор Swagger из Mac</strong>
-            <p id="macFileBrowserPath" class="muted">~</p>
-          </div>
-          <button id="closeMacFileBrowserButton" class="ghost" type="button">Закрыть</button>
+      <form id="swaggerUrlForm" class="swaggerUrlForm">
+        <label for="swaggerUrlInput">Ссылка на Swagger/OpenAPI</label>
+        <div class="inline">
+          <input id="swaggerUrlInput" type="url" required placeholder="https://example.com/openapi.json" autocomplete="off" spellcheck="false">
+          <button id="swaggerUrlButton" type="submit">Загрузить по ссылке</button>
         </div>
-        <div class="fileBrowserActions">
-          <button id="macFileBrowserHomeButton" class="ghost" type="button">Домой</button>
-          <button id="macFileBrowserUpButton" class="ghost" type="button">На уровень выше</button>
-        </div>
-        <div id="macFileBrowserList" class="fileBrowserList"></div>
-      </div>
+        <p id="swaggerUrlStatus" class="muted" role="status" aria-live="polite"></p>
+      </form>
 
+
+      <div class="routeTools">
+        <label>Загруженные документы
+          <select id="swaggerSourceSelect"><option value="">Все документы</option></select>
+        </label>
+        <button id="deleteSwaggerSource" class="ghost" type="button" disabled>Удалить документ</button>
+      </div>
       <div class="routeTools">
         <label>
           Поиск метода
           <input id="methodSearchInput" type="search" placeholder="GET /routes, shop, profile">
         </label>
         <label>
-          Название маршрута
+          Название сценария
           <input id="routeNameInput" type="text" placeholder="game-open-smoke" value="game-open-smoke">
         </label>
       </div>
@@ -98,8 +110,12 @@
       <div class="board">
         <div class="routeCanvas">
           <div class="routeCanvasHead">
-            <span>Маршрут</span>
+            <label class="builderRoutePicker" for="builderRouteSelect">
+              Сценарии
+              <select id="builderRouteSelect" disabled><option value="">Нет сохранённых сценариев</option></select>
+            </label>
             <div class="routeActions">
+              <button id="criticalRouteButton" type="button" title="Собрать путь открытия игры" hidden disabled>Критический путь</button>
               <button id="addSelectedButton" class="secondary" type="button" disabled>Добавить выбранный</button>
               <button id="connectButton" class="secondary" type="button" disabled>Соединить выбранные</button>
               <button id="clearRouteButton" class="ghost" type="button">Очистить</button>
@@ -115,21 +131,21 @@
             <span id="methodCount" class="muted">0 методов</span>
           </div>
           <div id="methodList" class="methodList">
-            <p class="muted">Пока нет загруженных методов.</p>
+            <p class="muted emptyState">Пока нет загруженных методов.</p>
           </div>
         </div>
       </div>
 
       <div class="savedRoutes">
         <div class="sectionHead compact">
-          <h3>Сохраненные маршруты</h3>
+          <h3>Сохранённые сценарии</h3>
           <button id="routesRefreshButton" class="ghost" type="button">Обновить</button>
         </div>
         <div id="savedRoutesList" class="savedRoutesList"></div>
       </div>
     </section>
 
-    <section class="panel loadBuilder">
+    <section class="panel loadBuilder appPage" data-page="load" aria-label="Настройка нагрузки" hidden>
       <div class="sectionHead">
         <div>
           <h2>Конструктор нагрузки на методы</h2>
@@ -140,8 +156,8 @@
 
       <div class="routeTools">
         <label>
-          Поиск метода
-          <input id="loadMethodSearchInput" type="search" placeholder="GET /profile, raffles, shop">
+          Сценарий
+          <select id="loadScenarioSelect" disabled><option value="">Выберите сохранённый сценарий</option></select>
         </label>
         <label>
           Название профиля
@@ -170,7 +186,28 @@
       </div>
     </section>
 
-    <section class="panel">
+    <section class="appPage" data-page="load" aria-label="Запуск нагрузки" hidden>
+      <form id="runForm" class="panel">
+        <h2>Запуск</h2>
+        <label for="commandSelect">Сценарий</label>
+        <select id="commandSelect">
+          <option value="">Нет сохранённых сценариев</option>
+        </select>
+
+        <label for="usersInput">Пользователи</label>
+        <input id="usersInput" type="number" min="1" max="10000" value="10">
+
+        <label id="routeSelectLabel" class="hidden" for="routeSelect">Сценарий</label>
+        <select id="routeSelect" class="hidden"></select>
+
+        <label id="profileSelectLabel" class="hidden" for="profileSelect">Профиль нагрузки</label>
+        <select id="profileSelect" class="hidden"></select>
+
+        <button id="runButton" type="submit">Запустить</button>
+      </form>
+    </section>
+
+    <section class="panel appPage" data-page="load" aria-label="Текущий запуск" hidden>
       <div class="sectionHead">
         <h2>Текущий запуск</h2>
         <span id="runBadge" class="badge idle">Нет запуска</span>
@@ -178,7 +215,7 @@
       <pre id="runOutput"></pre>
     </section>
 
-    <section class="panel">
+    <section class="panel appPage" data-page="load" aria-label="Отчёты" hidden>
       <div class="sectionHead">
         <h2>Отчеты</h2>
         <button id="reportsButton" type="button">Обновить</button>
@@ -187,6 +224,58 @@
     </section>
   </main>
 
+  <dialog id="workspaceDialog" class="tokenHelpDialog" aria-labelledby="workspaceDialogTitle">
+    <form id="workspaceForm">
+      <h2 id="workspaceDialogTitle">Новый проект</h2>
+      <label for="workspaceName">Название</label>
+      <input id="workspaceName" required maxlength="80" autocomplete="off">
+      <label for="workspaceBaseUrl">Адрес API</label>
+      <input id="workspaceBaseUrl" type="url" required placeholder="https://api.example.com" autocomplete="off">
+      <p id="workspaceError" role="alert"></p>
+      <div class="swaggerDeleteActions">
+        <button id="workspaceCancel" class="ghost" type="button">Отмена</button>
+        <button id="workspaceSave" type="submit">Создать</button>
+      </div>
+    </form>
+  </dialog>
+  <dialog id="swaggerDeleteDialog" class="tokenHelpDialog" aria-labelledby="swaggerDeleteTitle">
+    <h2 id="swaggerDeleteTitle">Удалить метод?</h2>
+    <p id="swaggerDeleteMessage"></p>
+    <p id="swaggerDeleteError" role="alert"></p>
+    <div class="swaggerDeleteActions">
+      <button id="swaggerDeleteCancel" class="ghost" type="button" autofocus>Оставить</button>
+      <button id="swaggerDeleteConfirm" type="button">Да, удалить</button>
+    </div>
+  </dialog>
+  <dialog id="tokenHelpDialog" class="tokenHelpDialog" aria-labelledby="tokenHelpTitle">
+    <div class="tokenHelpHeader">
+      <h2 id="tokenHelpTitle">Формат файла токенов</h2>
+      <button id="tokenHelpClose" class="dialogClose" type="button" aria-label="Закрыть" title="Закрыть" autofocus><span aria-hidden="true">×</span></button>
+    </div>
+    <p>Обычный текстовый файл <code>tokens.txt</code> в кодировке UTF-8, размером до 1 МБ. На каждой строке только значение одного токена.</p>
+    <pre class="tokenExample" aria-label="Пример структуры файла"># Замените строки ниже своими токенами
+SESSION_TOKEN_VALUE_1
+SESSION_TOKEN_VALUE_2
+SESSION_TOKEN_VALUE_3</pre>
+    <p class="muted">Это условные значения, не действующие токены.</p>
+    <ul>
+      <li>Не добавляйте имя cookie, префикс Bearer, кавычки или точку с запятой.</li>
+      <li>Копируйте значение целиком, сохраняя символы и кодирование, например <code>%2B</code> и <code>%3D</code>.</li>
+      <li>Пустые строки и строки, начинающиеся с <code>#</code>, пропускаются. Повторы удаляются.</li>
+      <li>JSON, таблицы и экспорт состояния браузера не подходят.</li>
+    </ul>
+    <p><strong>Импорт заменяет текущий набор токенов.</strong> Файл сохраняется локально. Не добавляйте его в репозиторий и не передавайте посторонним.</p>
+    <p class="muted">Успешный импорт означает сохранение, а не проверку срока действия токенов.</p>
+  </dialog>
+  <dialog id="tokenRejectedDialog" class="tokenHelpDialog" aria-labelledby="tokenRejectedTitle">
+    <div class="tokenHelpHeader">
+      <h2 id="tokenRejectedTitle">Невалидные токены</h2>
+      <button id="tokenRejectedClose" class="dialogClose" type="button" aria-label="Закрыть" title="Закрыть" autofocus>×</button>
+    </div>
+    <p>API отклонил эти токены с кодом 401. Замените их и повторите проверку.</p>
+    <p class="muted">Номера соответствуют сохранённому набору после удаления повторов и пустых строк. Значения скрыты частично.</p>
+    <ul id="tokenRejectedList" class="tokenRejectedList"></ul>
+  </dialog>
   <script src="./app.js" type="module"></script>
 </body>
 </html>
